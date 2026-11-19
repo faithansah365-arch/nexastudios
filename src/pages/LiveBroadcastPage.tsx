@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   FlipHorizontal,
+  Focus,
   Gauge,
   Lock,
   Maximize2,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
+import { AutoFrameTracker } from '../engine/autoFrame';
 import { StudioSegmenter } from '../engine/segmentation';
 import { getAspectDimensions, renderStudioFrame } from '../engine/studioRenderer';
 import { loadImageElement } from '../engine/videoCapabilities';
@@ -132,6 +134,12 @@ export function LiveBroadcastPage() {
   const [mirrorCamera, setMirrorCamera] = useState(true);
   const [savingFraming, setSavingFraming] = useState(false);
   const [framingSavedMsg, setFramingSavedMsg] = useState<string | null>(null);
+  const [autoFrameEnabled, setAutoFrameEnabled] = useState(false);
+  const [autoFrameDetected, setAutoFrameDetected] = useState(false);
+  const autoFrameTrackerRef = useRef<AutoFrameTracker | null>(null);
+  if (!autoFrameTrackerRef.current) {
+    autoFrameTrackerRef.current = new AutoFrameTracker();
+  }
   const [isDraggingSubject, setIsDraggingSubject] = useState(false);
   const dragOriginRef = useRef<{
     pointerId: number;
@@ -145,6 +153,7 @@ export function LiveBroadcastPage() {
     subjectConfig,
     fgEnabled,
     mirrorCamera,
+    autoFrameEnabled,
     selectedStudio,
     broadcastTitle,
     transparentKey,
@@ -156,12 +165,22 @@ export function LiveBroadcastPage() {
       subjectConfig,
       fgEnabled,
       mirrorCamera,
+      autoFrameEnabled,
       selectedStudio,
       broadcastTitle,
       transparentKey,
       watermarkRequired: plan?.limits.watermarkRequired ?? true,
     };
-  }, [subjectConfig, fgEnabled, mirrorCamera, selectedStudio, broadcastTitle, transparentKey, plan]);
+  }, [subjectConfig, fgEnabled, mirrorCamera, autoFrameEnabled, selectedStudio, broadcastTitle, transparentKey, plan]);
+
+  const toggleAutoFrame = useCallback(() => {
+    setAutoFrameEnabled((prev) => {
+      const next = !prev;
+      autoFrameTrackerRef.current?.reset();
+      if (!next) setAutoFrameDetected(false);
+      return next;
+    });
+  }, []);
 
   const [checklist, setChecklist] = useState({
     camera: false,
@@ -236,6 +255,7 @@ export function LiveBroadcastPage() {
     let rafId = 0;
     let frameCount = 0;
     let lastFpsSample = performance.now();
+    let lastAutoFrameUiSync = 0;
     const dims = getAspectDimensions('16:9', qualityProfile);
 
     const draw = (now: number) => {
@@ -261,11 +281,39 @@ export function LiveBroadcastPage() {
           edgeSoftness: s.subjectConfig.edgeSoftness ?? 2,
           edgeChoke: s.subjectConfig.edgeChoke ?? 0.3,
           bodySensitivity: s.subjectConfig.bodySensitivity ?? 0.6,
+          detectSilhouette: s.autoFrameEnabled,
           chromaColor: '#00b140',
           chromaSimilarity: 0.24,
           chromaSmoothness: 0.08,
           timestampMs: now,
         });
+
+        if (s.autoFrameEnabled && autoFrameTrackerRef.current) {
+          const tracked = autoFrameTrackerRef.current.update(
+            seg.lastSilhouetteBounds,
+            {
+              scale: s.subjectConfig.scale,
+              offsetX: s.subjectConfig.offsetX,
+              offsetY: s.subjectConfig.offsetY,
+            },
+            {
+              canvasWidth: canvas.width,
+              canvasHeight: canvas.height,
+              sourceWidth: video.videoWidth || canvas.width,
+              sourceHeight: video.videoHeight || canvas.height,
+              mirrorCamera: s.mirrorCamera,
+              deskEnabled: s.fgEnabled && baseFg.deskStyle !== 'none',
+              deskHeightRatio: baseFg.deskHeightRatio,
+            },
+            now
+          );
+          s.subjectConfig = { ...s.subjectConfig, ...tracked.framing };
+          if (now - lastAutoFrameUiSync >= 160) {
+            lastAutoFrameUiSync = now;
+            setAutoFrameDetected(tracked.detected);
+            setSubjectConfig((prev) => ({ ...prev, ...tracked.framing }));
+          }
+        }
       }
 
       renderStudioFrame(ctx, dims.width, dims.height, {
@@ -370,6 +418,10 @@ export function LiveBroadcastPage() {
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!cameraActive || !canvasRef.current) return;
+    if (autoFrameEnabled) {
+      setAutoFrameEnabled(false);
+      setAutoFrameDetected(false);
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     dragOriginRef.current = {
       pointerId: e.pointerId,
@@ -407,6 +459,8 @@ export function LiveBroadcastPage() {
   };
 
   const handleFitFullBody = () => {
+    setAutoFrameEnabled(false);
+    setAutoFrameDetected(false);
     setFgEnabled(false);
     setSubjectConfig((c) => ({
       ...c,
@@ -418,6 +472,8 @@ export function LiveBroadcastPage() {
   };
 
   const handleResetFraming = () => {
+    setAutoFrameEnabled(false);
+    setAutoFrameDetected(false);
     setSubjectConfig((c) => ({
       ...c,
       scale: 0.95,
@@ -564,7 +620,7 @@ export function LiveBroadcastPage() {
             )}
 
             <div
-              className={`aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 ${
+              className={`relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 ${
                 transparentKey ? 'bg-[conic-gradient(#1e293b_90deg,#0f172a_90deg_180deg,#1e293b_180deg_270deg,#0f172a_270deg)] bg-[length:24px_24px]' : 'bg-[#080B14]'
               }`}
             >
@@ -578,22 +634,53 @@ export function LiveBroadcastPage() {
                   cameraActive ? (isDraggingSubject ? 'cursor-grabbing' : 'cursor-grab') : ''
                 }`}
               />
+              {cameraActive && autoFrameEnabled && (
+                <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-[#080B14]/80 border border-[#06B6D4]/50 text-[11px] font-medium text-white flex items-center gap-1.5 pointer-events-none">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      autoFrameDetected ? 'bg-[#10B981] animate-pulse' : 'bg-amber-400'
+                    }`}
+                  />
+                  <span>{autoFrameDetected ? 'AI Auto-Frame · Tracking' : 'AI Auto-Frame · Searching'}</span>
+                </div>
+              )}
             </div>
 
             {/* Direct Stage Video Adjustment Bar */}
             <div className="px-3 py-2.5 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-1.5 text-slate-500 dark:text-[#94A3B8]">
                 <Move className="w-3.5 h-3.5 text-[#06B6D4]" />
-                <span>{cameraActive ? 'Drag video to move' : 'Adjust your broadcast framing'}</span>
+                <span>
+                  {autoFrameEnabled
+                    ? 'Auto-Frame keeps you centered'
+                    : cameraActive
+                    ? 'Drag video to move'
+                    : 'Adjust your broadcast framing'}
+                </span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleAutoFrame}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border font-semibold transition-colors ${
+                    autoFrameEnabled
+                      ? 'bg-[#6366F1] text-white border-[#6366F1]'
+                      : 'bg-[#6366F1]/10 text-[#6366F1] border-[#6366F1]/30 hover:bg-[#6366F1]/20'
+                  }`}
+                >
+                  <Focus className="w-3.5 h-3.5" />
+                  <span>{autoFrameEnabled ? 'Auto-Frame On' : 'Auto-Frame'}</span>
+                </button>
+
                 <div className="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
                   <button
                     type="button"
                     title="Zoom Out (Show More Body)"
-                    onClick={() =>
-                      setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale - 0.05).toFixed(2)), 0.35, 2.0) }))
-                    }
+                    onClick={() => {
+                      setAutoFrameEnabled(false);
+                      setAutoFrameDetected(false);
+                      setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale - 0.05).toFixed(2)), 0.35, 2.0) }));
+                    }}
                     className="px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     <ZoomOut className="w-3.5 h-3.5" />
@@ -604,9 +691,11 @@ export function LiveBroadcastPage() {
                   <button
                     type="button"
                     title="Zoom In"
-                    onClick={() =>
-                      setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale + 0.05).toFixed(2)), 0.35, 2.0) }))
-                    }
+                    onClick={() => {
+                      setAutoFrameEnabled(false);
+                      setAutoFrameDetected(false);
+                      setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale + 0.05).toFixed(2)), 0.35, 2.0) }));
+                    }}
                     className="px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     <ZoomIn className="w-3.5 h-3.5" />
@@ -805,6 +894,27 @@ export function LiveBroadcastPage() {
                   <div className="text-[11px] text-emerald-400">{framingSavedMsg}</div>
                 )}
 
+                <div className="p-2.5 rounded-lg bg-[#6366F1]/10 border border-[#6366F1]/30 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Focus className="w-3.5 h-3.5 text-[#06B6D4]" />
+                      <span>AI Auto-Frame</span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-[#94A3B8]">
+                      Dynamically tracks &amp; centers your silhouette.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleAutoFrame}
+                    className={`px-2.5 py-1 rounded font-semibold shrink-0 transition-colors ${
+                      autoFrameEnabled ? 'bg-[#10B981] text-white' : 'bg-[#6366F1] text-white hover:bg-[#5558E6]'
+                    }`}
+                  >
+                    {autoFrameEnabled ? 'Active' : 'Enable'}
+                  </button>
+                </div>
+
                 <div>
                   <div className="flex justify-between mb-1">
                     <span>Subject Scale</span>
@@ -816,7 +926,11 @@ export function LiveBroadcastPage() {
                     max={2.0}
                     step={0.02}
                     value={subjectConfig.scale}
-                    onChange={(e) => setSubjectConfig((c) => ({ ...c, scale: Number(e.target.value) }))}
+                    onChange={(e) => {
+                      setAutoFrameEnabled(false);
+                      setAutoFrameDetected(false);
+                      setSubjectConfig((c) => ({ ...c, scale: Number(e.target.value) }));
+                    }}
                     className="w-full"
                   />
                 </div>
@@ -831,7 +945,11 @@ export function LiveBroadcastPage() {
                     max={0.6}
                     step={0.01}
                     value={subjectConfig.offsetX}
-                    onChange={(e) => setSubjectConfig((c) => ({ ...c, offsetX: Number(e.target.value) }))}
+                    onChange={(e) => {
+                      setAutoFrameEnabled(false);
+                      setAutoFrameDetected(false);
+                      setSubjectConfig((c) => ({ ...c, offsetX: Number(e.target.value) }));
+                    }}
                     className="w-full"
                   />
                 </div>
@@ -846,7 +964,11 @@ export function LiveBroadcastPage() {
                     max={0.5}
                     step={0.01}
                     value={subjectConfig.offsetY}
-                    onChange={(e) => setSubjectConfig((c) => ({ ...c, offsetY: Number(e.target.value) }))}
+                    onChange={(e) => {
+                      setAutoFrameEnabled(false);
+                      setAutoFrameDetected(false);
+                      setSubjectConfig((c) => ({ ...c, offsetY: Number(e.target.value) }));
+                    }}
                     className="w-full"
                   />
                 </div>

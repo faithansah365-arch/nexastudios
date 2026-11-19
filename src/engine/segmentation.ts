@@ -1,4 +1,5 @@
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
+import { computeSilhouetteBounds, type SilhouetteBounds } from './autoFrame';
 
 export type SegmentationMode = 'mediapipe' | 'chroma_key' | 'original';
 
@@ -30,6 +31,7 @@ export class StudioSegmenter {
   private blurHorizBuf = new Float32Array(0);
   private finalBuf = new Float32Array(0);
   private hasTemporalHistory = false;
+  public lastSilhouetteBounds: SilhouetteBounds | null = null;
 
   public status: SegmentationStatus = {
     mode: 'mediapipe',
@@ -152,6 +154,7 @@ export class StudioSegmenter {
       edgeSoftness: number;
       edgeChoke?: number;
       bodySensitivity?: number;
+      detectSilhouette?: boolean;
       chromaColor: string;
       chromaSimilarity: number;
       chromaSmoothness: number;
@@ -160,7 +163,10 @@ export class StudioSegmenter {
   ): HTMLCanvasElement {
     const srcW = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
     const srcH = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
-    if (!srcW || !srcH) return this.personCanvas;
+    if (!srcW || !srcH) {
+      this.lastSilhouetteBounds = null;
+      return this.personCanvas;
+    }
 
     if (this.personCanvas.width !== srcW || this.personCanvas.height !== srcH) {
       this.personCanvas.width = srcW;
@@ -168,6 +174,28 @@ export class StudioSegmenter {
     }
 
     if (mode === 'original') {
+      if (options.detectSilhouette && this.segmenter) {
+        const maskW = Math.min(256, srcW);
+        const maskH = Math.max(1, Math.round((maskW / srcW) * srcH));
+        if (this.sampleCanvas.width !== maskW || this.sampleCanvas.height !== maskH) {
+          this.sampleCanvas.width = maskW;
+          this.sampleCanvas.height = maskH;
+        }
+        this.sampleCtx.drawImage(source, 0, 0, maskW, maskH);
+        try {
+          const result = this.segmenter.segmentForVideo(this.sampleCanvas, options.timestampMs);
+          const confidenceMasks = result.confidenceMasks;
+          if (confidenceMasks && confidenceMasks.length > 0) {
+            const floats = confidenceMasks[0].getAsFloat32Array();
+            this.lastSilhouetteBounds = computeSilhouetteBounds(floats, maskW, maskH);
+            result.close();
+          }
+        } catch {
+          // Keep last valid bounds if single frame fails
+        }
+      } else if (!options.detectSilhouette) {
+        this.lastSilhouetteBounds = null;
+      }
       this.personCtx.clearRect(0, 0, srcW, srcH);
       this.personCtx.drawImage(source, 0, 0, srcW, srcH);
       return this.personCanvas;
@@ -178,6 +206,7 @@ export class StudioSegmenter {
     }
 
     if (!this.segmenter) {
+      this.lastSilhouetteBounds = null;
       this.personCtx.clearRect(0, 0, srcW, srcH);
       this.personCtx.drawImage(source, 0, 0, srcW, srcH);
       return this.personCanvas;
@@ -331,6 +360,12 @@ export class StudioSegmenter {
           out.set(temporal);
         }
 
+        if (options.detectSilhouette) {
+          this.lastSilhouetteBounds = computeSilhouetteBounds(out, maskW, maskH);
+        } else {
+          this.lastSilhouetteBounds = null;
+        }
+
         const imgData = this.lastMaskImageData!;
         const data = imgData.data;
         for (let i = 0; i < total; i++) {
@@ -364,6 +399,7 @@ export class StudioSegmenter {
     srcH: number,
     options: {
       lowPowerMode: boolean;
+      detectSilhouette?: boolean;
       chromaColor: string;
       chromaSimilarity: number;
       chromaSmoothness: number;
@@ -422,6 +458,12 @@ export class StudioSegmenter {
           }
         }
       }
+    }
+
+    if (options.detectSilhouette) {
+      this.lastSilhouetteBounds = computeSilhouetteBounds(d, w, h, { isRgbaUint8: true });
+    } else {
+      this.lastSilhouetteBounds = null;
     }
 
     this.sampleCtx.putImageData(frame, 0, 0);

@@ -5,6 +5,7 @@ import {
   Camera,
   Download,
   FlipHorizontal,
+  Focus,
   Gauge,
   Layers,
   Maximize2,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
 import { useAuth } from '../context/AuthContext';
+import { AutoFrameTracker } from '../engine/autoFrame';
 import { StudioSegmenter, type SegmentationMode } from '../engine/segmentation';
 import { getAspectDimensions, renderStudioFrame } from '../engine/studioRenderer';
 import { detectBrowserCapabilities, formatDuration, loadImageElement } from '../engine/videoCapabilities';
@@ -139,9 +141,15 @@ export function LiveStudioPage() {
   const [exportStatus, setExportStatus] = useState<{ type: 'error' | 'success'; msg: string } | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Control panel tab & canvas drag state
+  // Control panel tab, Auto-Frame & canvas drag state
   const [activeTab, setActiveTab] = useState<'studio' | 'subject' | 'color' | 'branding'>('studio');
   const [showTeleprompter, setShowTeleprompter] = useState(false);
+  const [autoFrameEnabled, setAutoFrameEnabled] = useState(false);
+  const [autoFrameDetected, setAutoFrameDetected] = useState(false);
+  const autoFrameTrackerRef = useRef<AutoFrameTracker | null>(null);
+  if (!autoFrameTrackerRef.current) {
+    autoFrameTrackerRef.current = new AutoFrameTracker();
+  }
   const [isDraggingSubject, setIsDraggingSubject] = useState(false);
   const dragOriginRef = useRef<{
     pointerId: number;
@@ -161,6 +169,7 @@ export function LiveStudioPage() {
     mirrorCamera,
     segMode,
     lowPowerMode,
+    autoFrameEnabled,
     watermarkRequired: plan?.limits.watermarkRequired ?? true,
   });
 
@@ -174,9 +183,19 @@ export function LiveStudioPage() {
       mirrorCamera,
       segMode,
       lowPowerMode,
+      autoFrameEnabled,
       watermarkRequired: plan?.limits.watermarkRequired ?? true,
     };
-  }, [subjectConfig, fgConfig, branding, lightingPreset, aspectRatio, mirrorCamera, segMode, lowPowerMode, plan]);
+  }, [subjectConfig, fgConfig, branding, lightingPreset, aspectRatio, mirrorCamera, segMode, lowPowerMode, autoFrameEnabled, plan]);
+
+  const toggleAutoFrame = useCallback(() => {
+    setAutoFrameEnabled((prev) => {
+      const next = !prev;
+      autoFrameTrackerRef.current?.reset();
+      if (!next) setAutoFrameDetected(false);
+      return next;
+    });
+  }, []);
 
   // Load templates and user's custom studios
   useEffect(() => {
@@ -404,6 +423,7 @@ export function LiveStudioPage() {
     let rafId = 0;
     let frameCount = 0;
     let lastFpsSample = performance.now();
+    let lastAutoFrameUiSync = 0;
     const audioData = new Uint8Array(128);
 
     const renderLoop = (now: number) => {
@@ -430,11 +450,42 @@ export function LiveStudioPage() {
           edgeSoftness: s.subjectConfig.edgeSoftness,
           edgeChoke: s.subjectConfig.edgeChoke ?? 0.3,
           bodySensitivity: s.subjectConfig.bodySensitivity ?? 0.6,
+          detectSilhouette: s.autoFrameEnabled,
           chromaColor: s.subjectConfig.chromaKeyColor,
           chromaSimilarity: s.subjectConfig.chromaSimilarity,
           chromaSmoothness: s.subjectConfig.chromaSmoothness,
           timestampMs: now,
         });
+
+        if (s.autoFrameEnabled && autoFrameTrackerRef.current) {
+          const tracked = autoFrameTrackerRef.current.update(
+            seg.lastSilhouetteBounds,
+            {
+              scale: s.subjectConfig.scale,
+              offsetX: s.subjectConfig.offsetX,
+              offsetY: s.subjectConfig.offsetY,
+            },
+            {
+              canvasWidth: canvas.width,
+              canvasHeight: canvas.height,
+              sourceWidth: video.videoWidth || canvas.width,
+              sourceHeight: video.videoHeight || canvas.height,
+              mirrorCamera: s.mirrorCamera,
+              deskEnabled: s.fgConfig.enabled && s.fgConfig.deskStyle !== 'none',
+              deskHeightRatio: s.fgConfig.deskHeightRatio,
+            },
+            now
+          );
+          s.subjectConfig = {
+            ...s.subjectConfig,
+            ...tracked.framing,
+          };
+          if (now - lastAutoFrameUiSync >= 160) {
+            lastAutoFrameUiSync = now;
+            setAutoFrameDetected(tracked.detected);
+            setSubjectConfig((prev) => ({ ...prev, ...tracked.framing }));
+          }
+        }
       }
 
       renderStudioFrame(ctx, canvas.width, canvas.height, {
@@ -608,6 +659,10 @@ export function LiveStudioPage() {
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!cameraActive || !canvasRef.current) return;
+    if (autoFrameEnabled) {
+      setAutoFrameEnabled(false);
+      setAutoFrameDetected(false);
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     dragOriginRef.current = {
       pointerId: e.pointerId,
@@ -645,6 +700,8 @@ export function LiveStudioPage() {
   };
 
   const handleFitFullBody = () => {
+    setAutoFrameEnabled(false);
+    setAutoFrameDetected(false);
     setFgConfig((f) => ({ ...f, enabled: false }));
     setSubjectConfig((c) => ({
       ...c,
@@ -656,6 +713,8 @@ export function LiveStudioPage() {
   };
 
   const handleResetFraming = () => {
+    setAutoFrameEnabled(false);
+    setAutoFrameDetected(false);
     setSubjectConfig((c) => ({
       ...c,
       scale: 0.95,
@@ -837,6 +896,17 @@ export function LiveStudioPage() {
               </div>
             )}
 
+            {cameraActive && autoFrameEnabled && (
+              <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-[#080B14]/80 border border-[#06B6D4]/50 text-[11px] font-medium text-white flex items-center gap-1.5 pointer-events-none">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    autoFrameDetected ? 'bg-[#10B981] animate-pulse' : 'bg-amber-400'
+                  }`}
+                />
+                <span>{autoFrameDetected ? 'AI Auto-Frame · Tracking' : 'AI Auto-Frame · Searching'}</span>
+              </div>
+            )}
+
             {/* Teleprompter Overlay (Creator+ plans) */}
             {showTeleprompter && plan?.limits.teleprompter && branding.teleprompterText && (
               <div className="absolute top-4 inset-x-10 p-4 rounded-lg bg-[#080B14]/80 border border-slate-700 text-center text-sm text-white max-h-32 overflow-y-auto">
@@ -849,16 +919,37 @@ export function LiveStudioPage() {
           <div className="px-3 py-2.5 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-1.5 text-slate-500 dark:text-[#94A3B8]">
               <Move className="w-3.5 h-3.5 text-[#06B6D4]" />
-              <span>{cameraActive ? 'Drag video to move' : 'Adjust your video framing'}</span>
+              <span>
+                {autoFrameEnabled
+                  ? 'Auto-Frame keeps you centered'
+                  : cameraActive
+                  ? 'Drag video to move'
+                  : 'Adjust your video framing'}
+              </span>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={toggleAutoFrame}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border font-semibold transition-colors ${
+                  autoFrameEnabled
+                    ? 'bg-[#6366F1] text-white border-[#6366F1]'
+                    : 'bg-[#6366F1]/10 text-[#6366F1] border-[#6366F1]/30 hover:bg-[#6366F1]/20'
+                }`}
+              >
+                <Focus className="w-3.5 h-3.5" />
+                <span>{autoFrameEnabled ? 'Auto-Frame On' : 'Auto-Frame'}</span>
+              </button>
+
               <div className="inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
                 <button
                   type="button"
                   title="Zoom Out (Show More Body)"
-                  onClick={() =>
-                    setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale - 0.05).toFixed(2)), 0.35, 2.0) }))
-                  }
+                  onClick={() => {
+                    setAutoFrameEnabled(false);
+                    setAutoFrameDetected(false);
+                    setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale - 0.05).toFixed(2)), 0.35, 2.0) }));
+                  }}
                   className="px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
                   <ZoomOut className="w-3.5 h-3.5" />
@@ -869,9 +960,11 @@ export function LiveStudioPage() {
                 <button
                   type="button"
                   title="Zoom In"
-                  onClick={() =>
-                    setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale + 0.05).toFixed(2)), 0.35, 2.0) }))
-                  }
+                  onClick={() => {
+                    setAutoFrameEnabled(false);
+                    setAutoFrameDetected(false);
+                    setSubjectConfig((c) => ({ ...c, scale: clampNum(Number((c.scale + 0.05).toFixed(2)), 0.35, 2.0) }));
+                  }}
                   className="px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
                   <ZoomIn className="w-3.5 h-3.5" />
@@ -1150,6 +1243,29 @@ export function LiveStudioPage() {
 
           {activeTab === 'subject' && (
             <div className="space-y-4 text-xs">
+              <div className="p-3 rounded-lg bg-[#6366F1]/10 border border-[#6366F1]/30 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <Focus className="w-3.5 h-3.5 text-[#06B6D4]" />
+                    <span>AI Auto-Frame</span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 dark:text-[#94A3B8] mt-0.5">
+                    Tracks your silhouette &amp; dynamically centers zoom and position.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleAutoFrame}
+                  className={`px-3 py-1.5 rounded-lg font-semibold shrink-0 transition-colors ${
+                    autoFrameEnabled
+                      ? 'bg-[#10B981] text-white'
+                      : 'bg-[#6366F1] text-white hover:bg-[#5558E6]'
+                  }`}
+                >
+                  {autoFrameEnabled ? 'Active' : 'Enable'}
+                </button>
+              </div>
+
               <div>
                 <div className="flex justify-between mb-1">
                   <span>Subject Scale</span>
@@ -1161,7 +1277,11 @@ export function LiveStudioPage() {
                   max={2.0}
                   step={0.02}
                   value={subjectConfig.scale}
-                  onChange={(e) => setSubjectConfig((c) => ({ ...c, scale: Number(e.target.value) }))}
+                  onChange={(e) => {
+                    setAutoFrameEnabled(false);
+                    setAutoFrameDetected(false);
+                    setSubjectConfig((c) => ({ ...c, scale: Number(e.target.value) }));
+                  }}
                   className="w-full"
                 />
               </div>
@@ -1176,7 +1296,11 @@ export function LiveStudioPage() {
                   max={0.6}
                   step={0.01}
                   value={subjectConfig.offsetX}
-                  onChange={(e) => setSubjectConfig((c) => ({ ...c, offsetX: Number(e.target.value) }))}
+                  onChange={(e) => {
+                    setAutoFrameEnabled(false);
+                    setAutoFrameDetected(false);
+                    setSubjectConfig((c) => ({ ...c, offsetX: Number(e.target.value) }));
+                  }}
                   className="w-full"
                 />
               </div>
@@ -1191,7 +1315,11 @@ export function LiveStudioPage() {
                   max={0.5}
                   step={0.01}
                   value={subjectConfig.offsetY}
-                  onChange={(e) => setSubjectConfig((c) => ({ ...c, offsetY: Number(e.target.value) }))}
+                  onChange={(e) => {
+                    setAutoFrameEnabled(false);
+                    setAutoFrameDetected(false);
+                    setSubjectConfig((c) => ({ ...c, offsetY: Number(e.target.value) }));
+                  }}
                   className="w-full"
                 />
               </div>
