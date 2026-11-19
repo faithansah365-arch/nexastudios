@@ -87,7 +87,7 @@ export function VideoTransformPage() {
 
   const [templates, setTemplates] = useState<StudioTemplate[]>([]);
   const [customStudios, setCustomStudios] = useState<CustomStudio[]>([]);
-  const [selectedBgUrl, setSelectedBgUrl] = useState('/src/assets/images/studio_news_desk_1795011533684.jpg');
+  const [selectedBgUrl, setSelectedBgUrl] = useState('/src/assets/images/bg_news_broadcast_1795098704414.jpg');
 
   const [subjectConfig, setSubjectConfig] = useState<SubjectConfig>({
     scale: 1,

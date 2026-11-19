@@ -25,7 +25,7 @@ export function StudioGeneratorPage() {
   const [studioName, setStudioName] = useState('Custom Broadcast Studio');
   const [category, setCategory] = useState<StudioCategory>('Corporate Presentation Studios');
   const [studioType, setStudioType] = useState<StudioType>('layered_2_5d');
-  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/hero_virtual_studio_1795011533022.jpg');
+  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/bg_executive_keynote_1795098704486.jpg');
   const [lightingPreset, setLightingPreset] = useState<LightingPreset>('neutral');
   const [viewMode, setViewMode] = useState<'composite' | 'depth_3d'>('composite');
 

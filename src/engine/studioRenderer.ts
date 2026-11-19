@@ -21,17 +21,62 @@ export interface StudioRenderScene {
   transparentBackground?: boolean; // For keyed OBS output
 }
 
-// Reusable lightweight offscreen canvases for studio light-wrap compositing (zero GC overhead)
+// Reusable lightweight offscreen canvases for studio light-wrap & color-match compositing
 let envCanvas: HTMLCanvasElement | null = null;
 let envCtx: CanvasRenderingContext2D | null = null;
 let wrapCanvas: HTMLCanvasElement | null = null;
 let wrapCtx: CanvasRenderingContext2D | null = null;
+let tintCanvas: HTMLCanvasElement | null = null;
+let tintCtx: CanvasRenderingContext2D | null = null;
+let sampleToneCanvas: HTMLCanvasElement | null = null;
+let sampleToneCtx: CanvasRenderingContext2D | null = null;
+const ambientToneCache = new WeakMap<HTMLImageElement, { r: number; g: number; b: number }>();
+
+function sampleAmbientColor(img: HTMLImageElement | null): { r: number; g: number; b: number } {
+  if (!img || !img.complete || img.naturalWidth === 0 || typeof document === 'undefined') {
+    return { r: 24, g: 36, b: 64 };
+  }
+  const cached = ambientToneCache.get(img);
+  if (cached) return cached;
+  try {
+    if (!sampleToneCanvas) {
+      sampleToneCanvas = document.createElement('canvas');
+      sampleToneCanvas.width = 8;
+      sampleToneCanvas.height = 8;
+      sampleToneCtx = sampleToneCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (!sampleToneCtx) return { r: 24, g: 36, b: 64 };
+    sampleToneCtx.clearRect(0, 0, 8, 8);
+    sampleToneCtx.drawImage(img, 0, 0, 8, 8);
+    const data = sampleToneCtx.getImageData(0, 0, 8, 8).data;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    const count = data.length / 4;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+    }
+    const tone = {
+      r: Math.round(r / count),
+      g: Math.round(g / count),
+      b: Math.round(b / count),
+    };
+    ambientToneCache.set(img, tone);
+    return tone;
+  } catch {
+    return { r: 24, g: 36, b: 64 };
+  }
+}
 
 function ensureWrapBuffers(ew: number, eh: number): {
   envC: HTMLCanvasElement;
   envX: CanvasRenderingContext2D;
   wrapC: HTMLCanvasElement;
   wrapX: CanvasRenderingContext2D;
+  tintC: HTMLCanvasElement;
+  tintX: CanvasRenderingContext2D;
 } | null {
   if (typeof document === 'undefined') return null;
   if (!envCanvas) {
@@ -42,14 +87,20 @@ function ensureWrapBuffers(ew: number, eh: number): {
     wrapCanvas = document.createElement('canvas');
     wrapCtx = wrapCanvas.getContext('2d');
   }
-  if (!envCtx || !wrapCtx) return null;
+  if (!tintCanvas) {
+    tintCanvas = document.createElement('canvas');
+    tintCtx = tintCanvas.getContext('2d');
+  }
+  if (!envCtx || !wrapCtx || !tintCtx) return null;
   if (envCanvas.width !== ew || envCanvas.height !== eh) {
     envCanvas.width = ew;
     envCanvas.height = eh;
     wrapCanvas.width = ew;
     wrapCanvas.height = eh;
+    tintCanvas.width = ew;
+    tintCanvas.height = eh;
   }
-  return { envC: envCanvas, envX: envCtx, wrapC: wrapCanvas, wrapX: wrapCtx };
+  return { envC: envCanvas, envX: envCtx, wrapC: wrapCanvas, wrapX: wrapCtx, tintC: tintCanvas, tintX: tintCtx };
 }
 
 export function getAspectDimensions(ratio: AspectRatio, resolution: '720p' | '1080p' | '4k'): { width: number; height: number } {
@@ -65,15 +116,23 @@ export function getAspectDimensions(ratio: AspectRatio, resolution: '720p' | '10
   return { width: Math.round((baseHeight * 16) / 9), height: baseHeight };
 }
 
-function drawCoverImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement, cw: number, ch: number): void {
+function drawCoverImage(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  cw: number,
+  ch: number,
+  overscan = 1,
+  shiftX = 0,
+  shiftY = 0
+): void {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   if (!iw || !ih) return;
-  const scale = Math.max(cw / iw, ch / ih);
+  const scale = Math.max(cw / iw, ch / ih) * overscan;
   const dw = iw * scale;
   const dh = ih * scale;
-  const dx = (cw - dw) / 2;
-  const dy = (ch - dh) / 2;
+  const dx = (cw - dw) / 2 + shiftX;
+  const dy = (ch - dh) / 2 + shiftY;
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
@@ -197,14 +256,16 @@ function drawForegroundDesk(
 export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: number, scene: StudioRenderScene): void {
   ctx.clearRect(0, 0, w, h);
 
-  // 1. Background Layer
+  // 1. 2.5D Background Layer with subtle camera-depth counter-parallax
+  const parallaxX = Math.max(-0.018, Math.min(0.018, -(scene.subjectConfig.offsetX || 0) * 0.08)) * w;
+  const parallaxY = Math.max(-0.012, Math.min(0.012, -(scene.subjectConfig.offsetY || 0) * 0.05)) * h;
   if (!scene.transparentBackground) {
     ctx.save();
     if (scene.backgroundImg && scene.backgroundImg.complete && scene.backgroundImg.naturalWidth > 0) {
       if (scene.subjectConfig.bgBlur > 0) {
         ctx.filter = `blur(${scene.subjectConfig.bgBlur}px)`;
       }
-      drawCoverImage(ctx, scene.backgroundImg, w, h);
+      drawCoverImage(ctx, scene.backgroundImg, w, h, 1.04, parallaxX, parallaxY);
       ctx.filter = 'none';
     } else {
       const bgGrad = ctx.createLinearGradient(0, 0, w, h);
@@ -298,19 +359,39 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
       const eh = Math.max(68, Math.round((ew / w) * h));
       const bufs = ensureWrapBuffers(ew, eh);
       if (bufs) {
-        const { envC, envX, wrapC, wrapX } = bufs;
+        const { envC, envX, wrapC, wrapX, tintC, tintX } = bufs;
         const scaleRatio = ew / w;
         const sCx = cx * scaleRatio;
         const sCy = cy * scaleRatio;
         const sDw = drawW * scaleRatio;
         const sDh = drawH * scaleRatio;
 
-        // Capture diffused ambient background wall light
+        // Subtle atmospheric color-match so the person's skin/clothing tone matches the 2.5D room ambience
+        const tone = sampleAmbientColor(scene.backgroundImg);
+        tintX.save();
+        tintX.clearRect(0, 0, ew, eh);
+        tintX.translate(sCx, sCy);
+        if (scene.mirrorCamera) tintX.scale(-1, 1);
+        tintX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
+        tintX.globalCompositeOperation = 'source-in';
+        tintX.fillStyle = `rgb(${tone.r}, ${tone.g}, ${tone.b})`;
+        tintX.fillRect(-sDw / 2 - 4, -sDh / 2 - 4, sDw + 8, sDh + 8);
+        tintX.restore();
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'soft-light';
+        ctx.globalAlpha = Math.min(0.18, lightWrap * 0.35);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(tintC, 0, 0, w, h);
+        ctx.restore();
+
+        // Capture diffused ambient background wall light for 2-4px studio rim wrap
         envX.save();
         envX.clearRect(0, 0, ew, eh);
         envX.filter = 'blur(8px)';
         if (scene.backgroundImg && scene.backgroundImg.complete && scene.backgroundImg.naturalWidth > 0) {
-          drawCoverImage(envX, scene.backgroundImg, ew, eh);
+          drawCoverImage(envX, scene.backgroundImg, ew, eh, 1.04, parallaxX * scaleRatio, parallaxY * scaleRatio);
         } else {
           const g = envX.createLinearGradient(0, 0, ew, eh);
           g.addColorStop(0, '#0B1020');

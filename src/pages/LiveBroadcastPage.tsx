@@ -245,7 +245,7 @@ export function LiveBroadcastPage() {
         bgImgRef.current = img;
       });
     } else {
-      loadImageElement('/src/assets/images/studio_news_desk_1795011533684.jpg').then((img) => {
+      loadImageElement('/src/assets/images/bg_news_broadcast_1795098704414.jpg').then((img) => {
         bgImgRef.current = img;
       });
     }

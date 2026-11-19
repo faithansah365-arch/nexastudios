@@ -120,7 +120,7 @@ export function LiveStudioPage() {
   const [customStudios, setCustomStudios] = useState<CustomStudio[]>([]);
   const [activeStudioName, setActiveStudioName] = useState('Metro Briefing Desk');
   const [activeStudioId, setActiveStudioId] = useState<string | undefined>(undefined);
-  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/studio_news_desk_1795011533684.jpg');
+  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/bg_news_broadcast_1795098704414.jpg');
   const [subjectConfig, setSubjectConfig] = useState<SubjectConfig>(DEFAULT_SUBJECT);
   const [fgConfig, setFgConfig] = useState<ForegroundMaskConfig>(DEFAULT_FG);
   const [branding, setBranding] = useState<BrandingConfig>(DEFAULT_BRANDING);

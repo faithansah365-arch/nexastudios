@@ -27,7 +27,7 @@ export function StudioDesignerPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState('My Branded Studio');
-  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/studio_news_desk_1795011533684.jpg');
+  const [backgroundUrl, setBackgroundUrl] = useState('/src/assets/images/bg_news_broadcast_1795098704414.jpg');
   const [framing, setFraming] = useState<CameraFraming>('medium');
   const [lighting, setLighting] = useState<LightingPreset>('neutral');
   const [subject, setSubject] = useState<SubjectConfig>({

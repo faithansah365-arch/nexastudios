@@ -16,11 +16,14 @@ export class StudioSegmenter {
   private initPromise: Promise<void> | null = null;
   private maskCanvas: HTMLCanvasElement;
   private maskCtx: CanvasRenderingContext2D;
+  private decontamCanvas: HTMLCanvasElement;
+  private decontamCtx: CanvasRenderingContext2D;
   private personCanvas: HTMLCanvasElement;
   private personCtx: CanvasRenderingContext2D;
   private sampleCanvas: HTMLCanvasElement;
   private sampleCtx: CanvasRenderingContext2D;
   private lastMaskImageData: ImageData | null = null;
+  private lastDecontamImageData: ImageData | null = null;
 
   // Reusable per-pixel Float32 buffers for zero-allocation mask refinement
   private maskBufSize = 0;
@@ -44,6 +47,8 @@ export class StudioSegmenter {
   constructor() {
     this.maskCanvas = document.createElement('canvas');
     this.maskCtx = this.maskCanvas.getContext('2d', { willReadFrequently: true })!;
+    this.decontamCanvas = document.createElement('canvas');
+    this.decontamCtx = this.decontamCanvas.getContext('2d')!;
     this.personCanvas = document.createElement('canvas');
     this.personCtx = this.personCanvas.getContext('2d')!;
     this.sampleCanvas = document.createElement('canvas');
@@ -220,7 +225,10 @@ export class StudioSegmenter {
       this.sampleCanvas.height = maskH;
       this.maskCanvas.width = maskW;
       this.maskCanvas.height = maskH;
+      this.decontamCanvas.width = maskW;
+      this.decontamCanvas.height = maskH;
       this.lastMaskImageData = this.maskCtx.createImageData(maskW, maskH);
+      this.lastDecontamImageData = this.decontamCtx.createImageData(maskW, maskH);
       this.ensureBuffers(maskW * maskH);
     }
 
@@ -368,14 +376,85 @@ export class StudioSegmenter {
 
         const imgData = this.lastMaskImageData!;
         const data = imgData.data;
-        for (let i = 0; i < total; i++) {
-          const p = i * 4;
-          data[p] = 255;
-          data[p + 1] = 255;
-          data[p + 2] = 255;
-          data[p + 3] = Math.max(0, Math.min(255, Math.round(out[i] * 255)));
+        const decontamData = this.lastDecontamImageData!.data;
+        const srcPixels = this.sampleCtx.getImageData(0, 0, maskW, maskH).data;
+
+        for (let y = 0; y < maskH; y++) {
+          const row = y * maskW;
+          for (let x = 0; x < maskW; x++) {
+            const i = row + x;
+            const p = i * 4;
+            const alpha = out[i];
+
+            if (alpha <= 0.015) {
+              data[p] = 255;
+              data[p + 1] = 255;
+              data[p + 2] = 255;
+              data[p + 3] = 0;
+              decontamData[p + 3] = 0;
+              continue;
+            }
+
+            if (alpha >= 0.88) {
+              // Opaque interior core uses 100% full-resolution camera pixels
+              data[p] = 255;
+              data[p + 1] = 255;
+              data[p + 2] = 255;
+              data[p + 3] = Math.min(255, Math.round(alpha * 255));
+              decontamData[p + 3] = 0;
+              continue;
+            }
+
+            // Semi-transparent transition border: decontaminate RGB toward nearby solid foreground color
+            // so real-world room wall colors don't bleed onto hair or shoulders
+            let sumR = 0;
+            let sumG = 0;
+            let sumB = 0;
+            let weightSum = 0;
+            for (let dy = -2; dy <= 2; dy++) {
+              const ny = y + dy;
+              if (ny < 0 || ny >= maskH) continue;
+              const nRow = ny * maskW;
+              for (let dx = -2; dx <= 2; dx++) {
+                const nx = x + dx;
+                if (nx < 0 || nx >= maskW) continue;
+                const na = out[nRow + nx];
+                if (na >= 0.82) {
+                  const np = (nRow + nx) * 4;
+                  const w = na * (1 / (1 + dx * dx + dy * dy));
+                  sumR += srcPixels[np] * w;
+                  sumG += srcPixels[np + 1] * w;
+                  sumB += srcPixels[np + 2] * w;
+                  weightSum += w;
+                }
+              }
+            }
+
+            if (weightSum > 0) {
+              const fgR = sumR / weightSum;
+              const fgG = sumG / weightSum;
+              const fgB = sumB / weightSum;
+              const replaceMix = Math.min(0.95, 1 - alpha * 0.6);
+              decontamData[p] = Math.round(srcPixels[p] * (1 - replaceMix) + fgR * replaceMix);
+              decontamData[p + 1] = Math.round(srcPixels[p + 1] * (1 - replaceMix) + fgG * replaceMix);
+              decontamData[p + 2] = Math.round(srcPixels[p + 2] * (1 - replaceMix) + fgB * replaceMix);
+              decontamData[p + 3] = Math.min(255, Math.round(alpha * 255));
+              // Keep full-res core out of semi-transparent edge to prevent double room-color spill
+              data[p] = 255;
+              data[p + 1] = 255;
+              data[p + 2] = 255;
+              data[p + 3] = 0;
+            } else {
+              data[p] = 255;
+              data[p + 1] = 255;
+              data[p + 2] = 255;
+              data[p + 3] = Math.min(255, Math.round(alpha * 255));
+              decontamData[p + 3] = 0;
+            }
+          }
         }
         this.maskCtx.putImageData(imgData, 0, 0);
+        this.decontamCtx.putImageData(this.lastDecontamImageData!, 0, 0);
       }
     } catch {
       // Keep last valid mask if a single frame fails
@@ -388,6 +467,9 @@ export class StudioSegmenter {
     this.personCtx.drawImage(this.maskCanvas, 0, 0, srcW, srcH);
     this.personCtx.globalCompositeOperation = 'source-in';
     this.personCtx.drawImage(source, 0, 0, srcW, srcH);
+    // Composite decontaminated semi-transparent hair/shoulder rim behind full-res interior core
+    this.personCtx.globalCompositeOperation = 'destination-over';
+    this.personCtx.drawImage(this.decontamCanvas, 0, 0, srcW, srcH);
     this.personCtx.restore();
 
     return this.personCanvas;

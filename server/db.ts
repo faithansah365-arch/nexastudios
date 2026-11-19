@@ -209,9 +209,9 @@ const DEFAULT_TEMPLATES: StudioTemplate[] = [
     id: 'tpl_grace_sanctuary',
     name: 'Grace Sanctuary Broadcast',
     category: 'Church Broadcasting Studios',
-    description: 'Warm acoustic walnut sanctuary backdrop with a layered pulpit foreground plane for sermons and devotionals.',
-    thumbnailUrl: '/src/assets/images/studio_church_sanctuary_1795011534257.jpg',
-    backgroundUrl: '/src/assets/images/studio_church_sanctuary_1795011534257.jpg',
+    description: 'Warm acoustic walnut sanctuary virtual backdrop with stone arches and a layered pulpit plane.',
+    thumbnailUrl: '/src/assets/images/bg_sanctuary_backdrop_1795098725106.jpg',
+    backgroundUrl: '/src/assets/images/bg_sanctuary_backdrop_1795098725106.jpg',
     studioType: 'layered_2_5d',
     foregroundMaskConfig: {
       enabled: true,
@@ -258,9 +258,9 @@ const DEFAULT_TEMPLATES: StudioTemplate[] = [
     id: 'tpl_metro_briefing',
     name: 'Metro Briefing Desk',
     category: 'Television News Studios',
-    description: 'Cool glass-and-slate broadcast set with an anchor desk foreground layer and crisp lower-third framing.',
-    thumbnailUrl: '/src/assets/images/studio_news_desk_1795011533684.jpg',
-    backgroundUrl: '/src/assets/images/studio_news_desk_1795011533684.jpg',
+    description: 'Eye-level glass-and-navy broadcast virtual backdrop with an anchor desk foreground layer and crisp lower-third framing.',
+    thumbnailUrl: '/src/assets/images/bg_news_broadcast_1795098704414.jpg',
+    backgroundUrl: '/src/assets/images/bg_news_broadcast_1795098704414.jpg',
     studioType: 'layered_2_5d',
     foregroundMaskConfig: {
       enabled: true,
@@ -307,9 +307,9 @@ const DEFAULT_TEMPLATES: StudioTemplate[] = [
     id: 'tpl_midnight_podcast',
     name: 'Midnight Creator Lounge',
     category: 'Podcast Studios',
-    description: 'Acoustic charcoal studio with tungsten accents and an oak podcast foreground table.',
-    thumbnailUrl: '/src/assets/images/studio_podcast_lounge_1795011534156.jpg',
-    backgroundUrl: '/src/assets/images/studio_podcast_lounge_1795011534156.jpg',
+    description: 'Intimate acoustic charcoal wall with warm tungsten shelves and an oak podcast foreground table.',
+    thumbnailUrl: '/src/assets/images/bg_podcast_lounge_1795098704262.jpg',
+    backgroundUrl: '/src/assets/images/bg_podcast_lounge_1795098704262.jpg',
     studioType: 'layered_2_5d',
     foregroundMaskConfig: {
       enabled: true,
@@ -356,9 +356,9 @@ const DEFAULT_TEMPLATES: StudioTemplate[] = [
     id: 'tpl_horizon_led_stage',
     name: 'Horizon Curved LED Stage',
     category: 'Corporate Presentation Studios',
-    description: 'Curved LED broadcast wall with matte slate foreground desk for keynotes and live briefings.',
-    thumbnailUrl: '/src/assets/images/hero_virtual_studio_1795011533022.jpg',
-    backgroundUrl: '/src/assets/images/hero_virtual_studio_1795011533022.jpg',
+    description: 'Architectural slate & warm-wood keynote virtual backdrop with subtle cyan cove depth and slate foreground desk.',
+    thumbnailUrl: '/src/assets/images/bg_executive_keynote_1795098704486.jpg',
+    backgroundUrl: '/src/assets/images/bg_executive_keynote_1795098704486.jpg',
     studioType: 'layered_2_5d',
     foregroundMaskConfig: {
       enabled: true,
@@ -804,6 +804,25 @@ class NexaDatabase {
     if (existingTemplates.length === 0) {
       for (const tpl of DEFAULT_TEMPLATES) {
         await this.upsertTemplate(tpl);
+      }
+    } else {
+      // Idempotently upgrade legacy wide-room studio photos to true eye-level 2.5D virtual backgrounds
+      const legacyImageSet = new Set([
+        '/src/assets/images/studio_church_sanctuary_1795011534257.jpg',
+        '/src/assets/images/studio_news_desk_1795011533684.jpg',
+        '/src/assets/images/studio_podcast_lounge_1795011534156.jpg',
+        '/src/assets/images/hero_virtual_studio_1795011533022.jpg',
+      ]);
+      for (const def of DEFAULT_TEMPLATES) {
+        const cur = existingTemplates.find((t) => t.id === def.id);
+        if (cur && legacyImageSet.has(cur.backgroundUrl)) {
+          await this.upsertTemplate({
+            ...cur,
+            thumbnailUrl: def.thumbnailUrl,
+            backgroundUrl: def.backgroundUrl,
+            description: def.description,
+          });
+        }
       }
     }
 
