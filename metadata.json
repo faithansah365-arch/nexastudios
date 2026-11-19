@@ -1,0 +1,11 @@
+{
+  "name": "NexaFlow AI Studio",
+  "description": "AI-assisted virtual production and video creation SaaS. Create professional videos, design realistic virtual studios, and broadcast from anywhere.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

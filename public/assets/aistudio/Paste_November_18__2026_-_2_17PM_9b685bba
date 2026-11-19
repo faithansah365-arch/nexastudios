@@ -1,0 +1,1631 @@
+MASTER DEVELOPMENT PROMPT: NEXAFLOW AI STUDIO
+
+ROLE AND OBJECTIVE
+
+Act as a senior full-stack software engineer, AI computer vision engineer, virtual production specialist, 3D graphics developer, SaaS architect, UI/UX designer, cybersecurity engineer, and performance optimization specialist.
+
+Build a production-oriented, modern, scalable SaaS web application called NexaFlow AI Studio.
+
+The application must allow content creators, churches, podcasters, educators, businesses, and digital media professionals to create professional-looking video productions using realistic virtual studio environments.
+
+The core concept is simple:
+
+Transform an ordinary recording environment into a professional virtual production studio without requiring expensive physical studio equipment.
+
+Users must be able to:
+
+1. Record themselves directly inside a virtual studio using their camera.
+2. Upload existing videos and transform their backgrounds into professional studio environments.
+3. Upload photographs of studios and convert them into reusable virtual studio configurations.
+4. Position themselves realistically behind virtual desks and foreground objects.
+5. Customize studios with logos, colours, screens, furniture, and branding.
+6. Record and export professional video content.
+7. Prepare and conduct live broadcasts to supported platforms.
+8. Manage projects, recordings, and saved studios.
+9. Subscribe to paid plans for additional capabilities.
+10. Use the application through an intuitive interface without technical production knowledge.
+
+The platform must be designed for international customers.
+
+The primary subscription currency is USD.
+
+The development budget is strictly $0.
+
+Do not introduce paid APIs, paid AI models, paid infrastructure, or mandatory subscriptions.
+
+Prioritize open-source libraries, free development tools, and local browser-based processing.
+
+Do not use mock data, fake functionality, simulated payment confirmations, fabricated analytics, or non-functional interface controls.
+
+Where a feature requires unavailable infrastructure, credentials, or advanced implementation, create the correct integration architecture and clearly mark the feature as unavailable until configured.
+
+Do not claim that an unfinished feature is operational.
+
+---
+
+1. APPLICATION IDENTITY
+
+Application name: NexaFlow AI Studio
+
+Parent company: NexaFlow Technologies
+
+Product category: AI-assisted virtual production and video creation SaaS.
+
+Primary market: Global.
+
+Target customers:
+
+- Churches and religious organizations.
+- YouTubers and digital creators.
+- Podcasters.
+- Online tutors and educators.
+- Corporate content creators.
+- Social media influencers.
+- Digital marketing agencies.
+- Media production teams.
+- Small businesses.
+- Independent video professionals.
+
+Core value proposition:
+
+"Your Studio. Anywhere."
+
+Supporting description:
+
+"Create professional videos, design realistic virtual studios, and broadcast your content from anywhere."
+
+The product must look like a premium international SaaS application.
+
+Do not design it as a basic video background removal website.
+
+---
+
+2. DESIGN SYSTEM AND USER EXPERIENCE
+
+Create a modern, elegant, professional interface.
+
+Use a premium dark-themed creative software aesthetic.
+
+Suggested colours:
+
+Primary background: #080B14
+
+Secondary background: #111827
+
+Surface: #172033
+
+Primary accent: #6366F1
+
+Secondary accent: #06B6D4
+
+Primary text: #F8FAFC
+
+Secondary text: #94A3B8
+
+Success: #10B981
+
+Warning: #F59E0B
+
+Error: #EF4444
+
+Use subtle gradients, professional typography, carefully controlled animations, and consistent spacing.
+
+The interface should resemble high-quality professional creative software rather than a generic website template.
+
+Design requirements:
+
+- Fully responsive layout.
+- Desktop-first production workspace.
+- Mobile-friendly dashboard.
+- Collapsible navigation.
+- Professional iconography.
+- Smooth transitions.
+- Clear visual hierarchy.
+- Accessible controls.
+- Keyboard navigation.
+- Loading indicators.
+- Helpful empty states.
+- Real error messages.
+- Clear processing progress.
+- Light and dark themes where practical.
+- No unnecessary animations affecting rendering performance.
+
+The virtual studio workspace must maximize available screen space.
+
+The video preview should be the visual focus.
+
+Controls should be logically grouped and easy to understand.
+
+---
+
+3. PUBLIC MARKETING WEBSITE
+
+Build a complete public-facing website.
+
+Required pages:
+
+Home
+
+Features
+
+Virtual Studios
+
+How It Works
+
+Pricing
+
+Use Cases
+
+About
+
+Contact
+
+Help Center
+
+Sign In
+
+Create Account
+
+Privacy Policy
+
+Terms of Service
+
+Refund Policy
+
+The homepage must include:
+
+A compelling hero section.
+
+A clear explanation of the platform.
+
+Product capability demonstrations using genuine working application previews or clearly identified illustrations.
+
+A comparison between traditional studio production and virtual production.
+
+Features and benefits.
+
+Use cases for different creator categories.
+
+Subscription pricing.
+
+Frequently asked questions.
+
+Calls to action.
+
+Do not fabricate testimonials, customer statistics, reviews, or partnerships.
+
+Include proper SEO metadata, Open Graph tags, responsive layouts, and accessible semantic HTML.
+
+---
+
+4. USER AUTHENTICATION AND ACCOUNTS
+
+Implement secure authentication.
+
+Required capabilities:
+
+- User registration.
+- Email verification.
+- Secure login.
+- Password reset.
+- Logout.
+- Session management.
+- Account profile.
+- Password change.
+- Account deletion.
+- Subscription status.
+- Usage tracking.
+
+Use secure password hashing.
+
+Use server-side session validation.
+
+Apply rate limiting to authentication endpoints.
+
+Protect against account enumeration and brute-force attacks.
+
+Use secure, HttpOnly cookies where applicable.
+
+Never store passwords or sensitive authentication tokens in browser local storage.
+
+Support roles:
+
+Guest
+
+Free User
+
+Creator
+
+Pro Studio
+
+Business
+
+Administrator
+
+Treat subscription plans as entitlements rather than relying exclusively on role names.
+
+All paid feature access must be validated on the server.
+
+---
+
+5. CREATOR DASHBOARD
+
+Create a professional creator dashboard.
+
+Required sections:
+
+Overview
+
+Live AI Studio
+
+Video Transformation
+
+AI Studio Generator
+
+Studio Designer
+
+Live Broadcast
+
+My Projects
+
+My Studios
+
+Exports
+
+Subscription
+
+Billing History
+
+Account Settings
+
+Help and Support
+
+The dashboard should display:
+
+Current subscription.
+
+Available features.
+
+Monthly usage.
+
+Remaining exports.
+
+Saved studios.
+
+Recent projects.
+
+Account information.
+
+Subscription renewal date.
+
+Relevant notifications.
+
+Do not populate dashboards with fabricated statistics or placeholder projects.
+
+Use meaningful empty states when no data exists.
+
+---
+
+6. LIVE AI VIRTUAL STUDIO
+
+Build a functional browser-based virtual recording studio.
+
+Users must be able to grant permission for their camera and microphone.
+
+Display a live camera preview.
+
+Allow users to select a studio environment.
+
+Implement real-time person segmentation using MediaPipe or another suitable open-source browser-compatible solution.
+
+Use the segmentation output to separate the person from the original environment.
+
+Composite the person into the selected virtual studio.
+
+Support:
+
+Camera selection.
+
+Microphone selection.
+
+Camera permission handling.
+
+Microphone permission handling.
+
+Video resolution selection.
+
+Camera mirroring.
+
+Subject positioning.
+
+Subject scaling.
+
+Background selection.
+
+Studio switching.
+
+Audio monitoring.
+
+Recording controls.
+
+Recording timer.
+
+Live preview.
+
+Recording playback.
+
+Recording download.
+
+Use the browser MediaRecorder API or another appropriate supported recording mechanism.
+
+Record the final composited scene rather than only the original webcam feed.
+
+Preserve synchronized audio.
+
+Handle camera disconnections and permission failures gracefully.
+
+Implement performance monitoring.
+
+Display useful information such as frame rate, rendering status, and processing warnings.
+
+Use adaptive rendering quality for lower-powered devices.
+
+Avoid freezing the interface during video processing.
+
+Do not claim that the system supports photorealistic relighting or perfect foreground interaction unless those capabilities are genuinely implemented.
+
+---
+
+7. REALISTIC VIRTUAL STUDIO ENGINE
+
+This is the most important component.
+
+The platform must aim to make users appear naturally integrated into virtual studio environments.
+
+Use a layered scene composition architecture.
+
+Support:
+
+Background layer.
+
+Subject layer.
+
+Foreground layer.
+
+Branding layer.
+
+Text and graphics layer.
+
+Optional lighting and visual effects layer.
+
+Use Three.js, Canvas, WebGL, WebGPU, or suitable browser technologies where appropriate.
+
+Implement subject segmentation and alpha compositing.
+
+Provide controls for:
+
+Subject scale.
+
+Horizontal positioning.
+
+Vertical positioning.
+
+Foreground desk placement.
+
+Camera framing.
+
+Colour temperature.
+
+Brightness.
+
+Contrast.
+
+Saturation.
+
+Background blur.
+
+Edge softness.
+
+Basic shadow effects where technically supported.
+
+Support realistic foreground layering.
+
+For example:
+
+A creator should be able to appear behind a virtual television desk.
+
+The desk must be rendered in front of the appropriate part of the subject.
+
+Use controlled camera framing and predefined foreground masks for the initial implementation.
+
+Do not assume a single RGB camera can reliably reconstruct arbitrary body geometry or hidden surfaces.
+
+Avoid unrealistic promises about perfect hand-to-desk interactions.
+
+Prioritize stable video output, natural edges, and consistent frame-to-frame rendering.
+
+---
+
+8. BUILT-IN VIRTUAL STUDIO LIBRARY
+
+Create a virtual studio library.
+
+Initial categories:
+
+Church Broadcasting Studios
+
+Television News Studios
+
+Podcast Studios
+
+Educational Studios
+
+Corporate Presentation Studios
+
+Provide two functional free studio templates.
+
+Create a structure for additional premium templates.
+
+Each template must support:
+
+Studio name.
+
+Category.
+
+Thumbnail.
+
+Background image or scene asset.
+
+Foreground layer.
+
+Subject positioning configuration.
+
+Recommended camera framing.
+
+Lighting preset.
+
+Branding areas.
+
+Supported aspect ratios.
+
+Subscription entitlement.
+
+Do not use copyrighted third-party studio photographs or models without appropriate permission.
+
+Use original, properly licensed, or user-provided assets.
+
+If final premium assets are unavailable, provide a functional template management system without pretending that nonexistent assets are available.
+
+---
+
+9. AI STUDIO GENERATOR
+
+Create a custom studio generation workspace.
+
+Users should be able to upload a photograph of a studio environment.
+
+Supported formats:
+
+JPG
+
+PNG
+
+WebP
+
+The system must validate file type and size.
+
+Display the uploaded image.
+
+Provide tools to configure it as a reusable virtual studio.
+
+Required features:
+
+Background image upload.
+
+Subject placement controls.
+
+Subject scale adjustment.
+
+Foreground mask configuration.
+
+Desk positioning.
+
+Studio naming.
+
+Branding placement.
+
+Lighting presets.
+
+Preview.
+
+Save studio.
+
+Edit studio.
+
+Delete studio.
+
+Reuse studio.
+
+Where feasible, use open-source depth estimation or segmentation models to assist with scene analysis.
+
+However, a single photograph must not be treated as a complete 3D reconstruction.
+
+Implement a practical 2.5D studio approach using image layers, depth approximations, and controlled perspective.
+
+Allow users to manually correct foreground masks.
+
+Do not automatically claim that every uploaded image can become a realistic 3D studio.
+
+For the first implementation, prioritize fixed-camera scenes.
+
+The system must distinguish between:
+
+A simple background image.
+
+A layered 2.5D studio.
+
+A true 3D environment.
+
+Only label a studio as 3D when actual 3D geometry exists.
+
+---
+
+10. STUDIO DESIGNER
+
+Build a visual studio customization interface.
+
+Users should be able to customize supported studio properties without writing code.
+
+Features:
+
+Studio background selection.
+
+Logo upload.
+
+Brand colours.
+
+Screen graphics.
+
+Text overlays.
+
+Lower-third titles.
+
+Subject positioning.
+
+Foreground desk selection.
+
+Camera framing.
+
+Lighting presets.
+
+Save configuration.
+
+Duplicate studio.
+
+Rename studio.
+
+Delete studio.
+
+Preview changes.
+
+Support drag-and-drop positioning where practical.
+
+Maintain consistent positioning between previews and exported recordings.
+
+Allow studios to be saved as reusable project templates.
+
+---
+
+11. VIDEO UPLOAD AND TRANSFORMATION
+
+Build a functional video transformation workspace.
+
+Users should be able to upload existing videos.
+
+Supported input formats should be determined by actual browser decoding capabilities.
+
+Do not promise universal codec support.
+
+Provide file validation and clear error messages.
+
+The workflow should be:
+
+Upload video.
+
+Select studio.
+
+Configure subject positioning.
+
+Apply background segmentation.
+
+Configure foreground elements.
+
+Preview transformation.
+
+Adjust visual settings.
+
+Export video.
+
+Use browser-compatible processing where feasible.
+
+Consider ffmpeg.wasm for supported post-processing tasks, but account for memory usage, download size, and device limitations.
+
+Do not process entire large videos in memory unnecessarily.
+
+Support progress indicators and cancellation.
+
+Preserve audio synchronization.
+
+Provide appropriate warnings when the device cannot process a selected video.
+
+Prioritize realistic and stable compositing over excessive visual effects.
+
+---
+
+12. VIDEO EDITING TOOLS
+
+Implement practical editing features where technically feasible.
+
+Core features:
+
+Trim video.
+
+Crop video.
+
+Change aspect ratio.
+
+Add logo.
+
+Add text.
+
+Add lower thirds.
+
+Adjust brightness.
+
+Adjust contrast.
+
+Adjust saturation.
+
+Mute audio.
+
+Adjust audio volume.
+
+Export recording.
+
+Support common aspect ratios:
+
+16:9
+
+9:16
+
+1:1
+
+Where automatic captions or advanced audio enhancement require additional models, implement them only when a working local or approved integration is available.
+
+Do not simulate transcription results.
+
+Do not display fabricated captions.
+
+---
+
+13. LIVE BROADCAST STUDIO
+
+Create a professional live broadcasting workspace.
+
+Users must be able to prepare their virtual studio for live streaming.
+
+Required features:
+
+Live camera preview.
+
+Studio selection.
+
+Audio controls.
+
+Brand overlays.
+
+Lower thirds.
+
+Broadcast title.
+
+Broadcast destination.
+
+Stream status.
+
+Recording controls.
+
+Connection information.
+
+Broadcast preparation checklist.
+
+Support an OBS-based workflow initially.
+
+Provide a compatible method for capturing the composited studio output in OBS.
+
+This may include a dedicated clean-output browser view suitable for OBS Browser Source or window capture.
+
+The clean-output view must not expose sensitive account information.
+
+Do not expose private project content publicly.
+
+Support transparent or appropriately keyed scene output where feasible.
+
+Include clear instructions for configuring OBS and YouTube Live.
+
+Design the architecture for future direct streaming through a properly implemented encoder and publishing pipeline.
+
+Potential destinations:
+
+YouTube Live.
+
+Facebook Live.
+
+Twitch.
+
+Custom RTMP/RTMPS destinations.
+
+Multistreaming.
+
+Do not mark direct streaming or multistreaming as functional until the underlying pipeline has been implemented and tested.
+
+Never expose stream keys in logs or public client interfaces.
+
+Use secure storage and authorization for any future server-managed streaming credentials.
+
+Include warnings about dropped frames and unstable connections where supported.
+
+---
+
+14. SUBSCRIPTION BUSINESS MODEL
+
+Implement four subscription plans.
+
+Primary currency: USD.
+
+Plans:
+
+FREE
+
+CREATOR — $19/month
+
+PRO STUDIO — $49/month
+
+BUSINESS — $99/month
+
+Annual prices:
+
+Creator — $190/year.
+
+Pro Studio — $490/year.
+
+Business — $990/year.
+
+The annual plans represent approximately two months free compared with monthly billing.
+
+Create a professional pricing page.
+
+Display features clearly.
+
+Allow users to compare plans.
+
+Implement subscription entitlements and usage limits.
+
+Do not assume that displaying USD means the payment provider can charge or settle USD for a Ghanaian merchant.
+
+The payment integration must support transparent currency conversion when required.
+
+---
+
+15. SUBSCRIPTION FEATURE LIMITS
+
+Implement the following initial entitlement configuration.
+
+FREE PLAN
+
+Price: $0.
+
+2 studio templates.
+
+1 saved custom studio.
+
+3-minute recording limit per session.
+
+2 exports per month.
+
+720p maximum export.
+
+Visible NexaFlow watermark.
+
+100 MB maximum uploaded video.
+
+No cloud video storage.
+
+No paid cloud AI processing.
+
+No direct streaming.
+
+Limited live preview.
+
+CREATOR PLAN
+
+Price: $19/month.
+
+15 studio templates.
+
+5 saved custom studios.
+
+30-minute recording limit per session.
+
+30 exports per month.
+
+1080p maximum export.
+
+No watermark.
+
+1 GB maximum uploaded video.
+
+Custom branding.
+
+Teleprompter.
+
+OBS streaming workflow.
+
+PRO STUDIO PLAN
+
+Price: $49/month.
+
+50 studio templates.
+
+25 saved custom studios.
+
+2-hour recording limit per session.
+
+100 exports per month.
+
+1080p maximum export.
+
+No watermark.
+
+3 GB maximum uploaded video.
+
+Advanced studio customization.
+
+2 team members.
+
+Priority support.
+
+BUSINESS PLAN
+
+Price: $99/month.
+
+Access to all available studio templates.
+
+100 saved custom studios.
+
+4-hour recording limit per session.
+
+300 exports per month.
+
+Up to 4K export where device capabilities permit.
+
+No watermark.
+
+5 GB maximum uploaded video.
+
+Advanced branding.
+
+5 team members.
+
+Priority support.
+
+Access to advanced broadcasting features when implemented.
+
+These limits must be stored in a configurable entitlement system rather than hardcoded throughout the application.
+
+The administrator must be able to update plan limits.
+
+Do not advertise unsupported capabilities as active benefits.
+
+---
+
+16. FREE PLAN ABUSE PREVENTION
+
+The free plan must be tightly controlled to protect operating costs.
+
+Require account registration and email verification before exporting.
+
+Implement server-side usage tracking.
+
+Track:
+
+Monthly exports.
+
+Saved studios.
+
+Subscription status.
+
+Plan limits.
+
+Relevant usage events.
+
+Apply rate limits to sensitive operations.
+
+Prevent repeated export requests from bypassing usage limits.
+
+Use atomic quota updates where appropriate.
+
+Avoid charging users for failed exports.
+
+Where export processing occurs locally, clearly distinguish between enforceable server-side entitlements and controls that can be bypassed through client modification.
+
+Do not assume client-side JavaScript restrictions are tamper-proof.
+
+Do not use invasive device fingerprinting.
+
+Provide fair and transparent account-abuse protections.
+
+Display remaining usage in the dashboard.
+
+When a user reaches a limit, show an upgrade option.
+
+Never silently charge users.
+
+---
+
+17. PAYSTACK PAYMENT INTEGRATION
+
+Integrate Paystack using its official supported APIs.
+
+Support:
+
+Subscription checkout.
+
+Payment verification.
+
+Payment history.
+
+Plan upgrades.
+
+Plan downgrades.
+
+Subscription expiry.
+
+Cancellation.
+
+Renewal.
+
+Failed payments.
+
+Payment webhooks.
+
+Manual renewal where automatic recurring payments are unavailable.
+
+The platform is operated initially from Ghana.
+
+Do not assume Paystack Ghana can charge customers directly in USD.
+
+Implement a configurable pricing and currency conversion layer.
+
+Display the final transaction amount and currency before checkout.
+
+Do not invent exchange rates.
+
+Use a verified exchange-rate source or an administrator-approved rate configuration.
+
+All payment calculations must be performed securely on the backend.
+
+Never trust payment amounts supplied by the frontend.
+
+Keep Paystack secret keys server-side.
+
+Verify payment status using Paystack's official verification endpoint.
+
+Validate webhook signatures.
+
+Make webhook processing idempotent.
+
+Never activate a subscription based solely on a frontend success message.
+
+Support Paystack test mode during development.
+
+Do not process real payments until live credentials and business requirements have been configured.
+
+If Paystack does not support a requested recurring payment method, use an honest manual-renewal workflow.
+
+---
+
+18. ADMIN DASHBOARD
+
+Create a completely separate administrator workspace.
+
+Suggested route:
+
+/admin
+
+Do not display the administrator route in the public navigation.
+
+The route being hidden must not be treated as a security mechanism.
+
+Protect all administrative endpoints with server-side authorization.
+
+Administrator features:
+
+Dashboard overview.
+
+User management.
+
+Subscription management.
+
+Plan configuration.
+
+Feature entitlement management.
+
+Studio template management.
+
+Payment records.
+
+Usage analytics.
+
+System settings.
+
+Support requests.
+
+Account suspension.
+
+Audit logs.
+
+Application configuration.
+
+Feature availability controls.
+
+The administrator should be able to:
+
+Create studio templates.
+
+Edit templates.
+
+Delete templates.
+
+Change subscription prices.
+
+Update plan limits.
+
+Enable or disable features.
+
+Review users.
+
+Review payment records.
+
+Manage support requests.
+
+View real usage statistics.
+
+Do not fabricate revenue, user counts, subscription statistics, or usage data.
+
+Use actual database records.
+
+Require strong administrator authentication.
+
+Support multifactor authentication where practical.
+
+Log sensitive administrative actions.
+
+Do not create a hardcoded administrator password.
+
+Provide a secure initial administrator provisioning process.
+
+---
+
+19. DATABASE ARCHITECTURE
+
+Use MongoDB Atlas where appropriate.
+
+Design suitable collections for:
+
+Users.
+
+Sessions.
+
+Subscriptions.
+
+Plans.
+
+Payments.
+
+Usage records.
+
+Projects.
+
+Studios.
+
+Studio templates.
+
+Exports.
+
+Team memberships.
+
+Support requests.
+
+Audit logs.
+
+Application settings.
+
+Create appropriate indexes.
+
+Validate all database inputs.
+
+Apply least-privilege database access.
+
+Do not expose MongoDB credentials in frontend code.
+
+Store project metadata separately from large media files.
+
+Do not store large raw video files directly in ordinary MongoDB documents.
+
+For the initial zero-budget version, prioritize local media processing and storage.
+
+Only introduce cloud media storage when an appropriate service is configured.
+
+Provide clear explanations to users about which files are stored locally and which are uploaded.
+
+---
+
+20. VIDEO PROCESSING ARCHITECTURE
+
+Use a browser-first processing architecture.
+
+Prioritize local processing to reduce infrastructure costs.
+
+Core technologies may include:
+
+React.
+
+TypeScript.
+
+Three.js.
+
+MediaPipe.
+
+Canvas.
+
+WebGL.
+
+WebGPU where supported.
+
+MediaRecorder.
+
+Web Audio API.
+
+Web Workers.
+
+ffmpeg.wasm where appropriate.
+
+Use only libraries compatible with the application's licensing and distribution requirements.
+
+Do not assume all browsers support the same recording formats, codecs, or hardware acceleration.
+
+Implement capability detection.
+
+Provide appropriate fallbacks.
+
+Avoid blocking the main interface during intensive processing.
+
+Manage memory carefully.
+
+Release camera streams and processing resources when no longer needed.
+
+Handle device limitations gracefully.
+
+Provide clear feedback when a device cannot support a requested feature.
+
+Do not introduce paid GPU services.
+
+Do not send user videos to external AI providers without explicit disclosure and appropriate consent.
+
+---
+
+21. PERFORMANCE OPTIMIZATION
+
+Optimize the entire application.
+
+Requirements:
+
+Fast initial loading.
+
+Lazy-loaded production modules.
+
+Code splitting.
+
+Optimized studio assets.
+
+Efficient video rendering.
+
+Responsive controls.
+
+Minimal unnecessary network requests.
+
+Memory management.
+
+GPU resource cleanup.
+
+Adaptive preview quality.
+
+Background processing where practical.
+
+Mobile performance optimization.
+
+Prevent unnecessary React re-renders.
+
+Avoid downloading large AI models before users enter a workspace that requires them.
+
+Provide a low-performance mode.
+
+Allow users to lower preview resolution.
+
+Maintain audio synchronization.
+
+Do not sacrifice video stability for decorative visual effects.
+
+---
+
+22. SECURITY AND PRIVACY
+
+Implement security from the beginning.
+
+Requirements:
+
+Server-side authentication.
+
+Role-based access control.
+
+Subscription entitlement validation.
+
+Secure password hashing.
+
+Input validation.
+
+Rate limiting.
+
+CSRF protection where applicable.
+
+XSS prevention.
+
+Secure file upload validation.
+
+Protected administrative routes.
+
+Secure API endpoints.
+
+Payment webhook verification.
+
+Environment-variable management.
+
+Secret protection.
+
+Audit logging.
+
+Secure session handling.
+
+Appropriate CORS policies.
+
+Privacy-conscious usage analytics.
+
+Do not expose API keys or database credentials.
+
+Do not include secret values in frontend bundles.
+
+Do not create public storage buckets containing private customer videos.
+
+Respect user ownership of uploaded media.
+
+Include account and data deletion functionality.
+
+Provide clear consent and privacy notices.
+
+---
+
+23. ERROR HANDLING
+
+Every major operation must handle errors properly.
+
+Examples:
+
+Camera permission denied.
+
+Microphone unavailable.
+
+Unsupported browser.
+
+Insufficient device memory.
+
+Video processing failure.
+
+Unsupported video codec.
+
+Invalid uploaded file.
+
+Network connection failure.
+
+Database connection failure.
+
+Authentication failure.
+
+Payment verification failure.
+
+Subscription expired.
+
+Usage limit reached.
+
+Rendering interrupted.
+
+Streaming configuration unavailable.
+
+Display meaningful error messages.
+
+Provide recovery actions where possible.
+
+Never display raw server stack traces to ordinary users.
+
+Do not falsely report success when an operation fails.
+
+---
+
+24. APPLICATION DEPLOYMENT
+
+Prepare the application for deployment.
+
+Use environment variables for configuration.
+
+Separate development and production settings.
+
+Provide secure backend API architecture.
+
+Ensure the frontend does not directly connect to MongoDB Atlas using privileged credentials.
+
+Support local development.
+
+Provide deployment instructions.
+
+Consider commercial hosting restrictions.
+
+Do not assume free personal-use hosting plans permit commercial SaaS operations.
+
+Keep the development environment operational without requiring paid services.
+
+Where external credentials are unavailable, provide configuration screens and clear setup instructions rather than fabricated integrations.
+
+---
+
+25. QUALITY ASSURANCE
+
+Implement automated tests where practical.
+
+Test:
+
+Registration.
+
+Login.
+
+Authentication.
+
+Subscription entitlements.
+
+Free plan restrictions.
+
+Camera access.
+
+Microphone access.
+
+Live preview.
+
+Video recording.
+
+Audio synchronization.
+
+Video upload.
+
+Studio selection.
+
+Foreground layering.
+
+Studio saving.
+
+Video export.
+
+Payment verification.
+
+Webhook processing.
+
+Admin authorization.
+
+Usage tracking.
+
+Responsive layouts.
+
+Error handling.
+
+Do not use fabricated test results.
+
+Do not mark features as tested unless tests have actually been executed.
+
+Provide a clear report distinguishing:
+
+Implemented and tested features.
+
+Implemented but untested features.
+
+Partially implemented features.
+
+Unavailable features.
+
+Features requiring external credentials.
+
+---
+
+26. IMPLEMENTATION PRIORITIES
+
+Although this is one complete development prompt, implement the application in a technically sensible order.
+
+Priority 1:
+
+Application foundation, routing, authentication, and database architecture.
+
+Priority 2:
+
+Functional live camera preview and recording.
+
+Priority 3:
+
+Subject segmentation and layered virtual studio compositing.
+
+Priority 4:
+
+Video upload and transformation.
+
+Priority 5:
+
+Custom studio image upload and studio designer.
+
+Priority 6:
+
+Video export and editing tools.
+
+Priority 7:
+
+OBS-compatible broadcasting workflow.
+
+Priority 8:
+
+Subscription entitlement system.
+
+Priority 9:
+
+Paystack test-mode integration.
+
+Priority 10:
+
+Admin dashboard, testing, optimization, and deployment preparation.
+
+Do not sacrifice working core functionality merely to complete every feature superficially.
+
+Implement real features wherever technically possible.
+
+When a feature cannot be completed, preserve a clean architecture for future development and clearly identify the remaining work.
+
+---
+
+27. NON-NEGOTIABLE REQUIREMENTS
+
+1. The application must be called NexaFlow AI Studio.
+
+2. The product must be designed as a global SaaS platform.
+
+3. The initial development budget must remain $0.
+
+4. No mandatory paid APIs.
+
+5. No fabricated application data.
+
+6. No fake payment confirmations.
+
+7. No fake AI processing.
+
+8. No non-functional buttons presented as working features.
+
+9. No exposed API secrets.
+
+10. No hardcoded administrator credentials.
+
+11. No client-side-only subscription enforcement.
+
+12. No unsupported claims of photorealistic AI capabilities.
+
+13. No automatic paid cloud processing.
+
+14. No assumption that browser processing works equally well on every device.
+
+15. No assumption that custom studio photographs can automatically become complete 3D environments.
+
+16. No claim of direct YouTube streaming until a functioning broadcast pipeline exists.
+
+17. No claim of automatic mobile money recurring billing where the payment provider does not support it.
+
+18. No fabricated customer testimonials or revenue statistics.
+
+19. No real-money payment activation during development.
+
+20. The system must be maintainable, secure, and extensible.
+
+---
+
+28. EXPECTED FINAL DELIVERABLE
+
+Generate a complete, coherent application codebase.
+
+The application should include:
+
+A professional marketing website.
+
+Secure authentication.
+
+Creator dashboard.
+
+Live virtual studio workspace.
+
+Video upload and transformation workspace.
+
+Custom studio generator.
+
+Studio designer.
+
+Studio template library.
+
+Video recording and export.
+
+OBS-compatible broadcasting workflow.
+
+Subscription pricing page.
+
+Subscription entitlement system.
+
+Paystack integration in test mode.
+
+Billing management.
+
+Separate protected administrator dashboard.
+
+Database models.
+
+Backend API routes.
+
+Security controls.
+
+Responsive layouts.
+
+Error handling.
+
+Deployment configuration.
+
+Development documentation.
+
+Testing documentation.
+
+Feature implementation status.
+
+Prioritize working functionality over visual demonstrations.
+
+If the environment cannot execute or test a component, explicitly explain what remains unverified.
+
+The application should be structured so that additional AI video processing models, cloud rendering services, advanced relighting, direct streaming, and multistreaming can be integrated later without rebuilding the entire platform.
+
+Begin building NexaFlow AI Studio now.
+
+Do not respond with only a project plan or architecture description.
+
+Generate and integrate the actual application components.
+
+Use reasonable technical defaults where requirements are not specified.
+
+Maintain the zero-cost development constraint throughout.
+
+The ultimate goal is to create a reliable, professional, commercially viable virtual production SaaS that allows creators to record, transform, customize, and broadcast videos from realistic virtual studio environments.
