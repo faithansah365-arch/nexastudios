@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { Menu, Moon, Sun, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { BrandLogo } from './BrandLogo';
 
 export function PublicLayout({ children }: { children: React.ReactNode }) {
   const { user, theme, toggleTheme } = useAuth();
@@ -23,9 +24,9 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
           <Link
             to="/"
-            className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-[#F8FAFC] whitespace-nowrap shrink-0"
+            className="inline-flex items-center whitespace-nowrap shrink-0"
           >
-            NexaFlow AI Studio
+            <BrandLogo />
           </Link>
 
           <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-[#94A3B8]">
@@ -133,9 +134,11 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
       <footer className="border-t border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#080B14] mt-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12 grid grid-cols-1 md:grid-cols-4 gap-8">
           <div className="space-y-3">
-            <div className="font-display text-base font-bold text-slate-900 dark:text-white">NexaFlow AI Studio</div>
+            <Link to="/" className="inline-flex items-center">
+              <BrandLogo size="sm" />
+            </Link>
             <p className="text-sm text-slate-600 dark:text-[#94A3B8] leading-relaxed">
-              Your Studio. Anywhere. Built by NexaFlow Technologies for creators, churches, educators, and media teams.
+              Your Studio. Anywhere. Built by NexaStudios for creators, churches, educators, and media teams.
             </p>
           </div>
 
@@ -153,7 +156,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
           <div>
             <div className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Company &amp; Support</div>
             <ul className="space-y-2 text-sm text-slate-600 dark:text-[#94A3B8]">
-              <li><Link to="/about" className="hover:text-slate-900 dark:hover:text-white">About NexaFlow</Link></li>
+              <li><Link to="/about" className="hover:text-slate-900 dark:hover:text-white">About NexaStudios</Link></li>
               <li><Link to="/help" className="hover:text-slate-900 dark:hover:text-white">Help Center</Link></li>
               <li><Link to="/contact" className="hover:text-slate-900 dark:hover:text-white">Contact Support</Link></li>
               <li><Link to="/signin" className="hover:text-slate-900 dark:hover:text-white">Sign In</Link></li>
@@ -172,7 +175,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="border-t border-slate-200 dark:border-slate-800/80 py-5 px-4 sm:px-6 max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span>© {new Date().getFullYear()} NexaFlow Technologies. All rights reserved.</span>
+          <span>© {new Date().getFullYear()} NexaStudios. All rights reserved.</span>
           <span>Browser-first local video processing · Primary currency USD</span>
         </div>
       </footer>

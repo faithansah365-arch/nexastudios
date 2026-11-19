@@ -69,11 +69,11 @@ function renderGoogleCallbackHtml(payload: { type: 'GOOGLE_AUTH_SUCCESS'; exchan
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>NexaFlow Google Sign-In</title>
+    <title>NexaStudios Google Sign-In</title>
   </head>
   <body style="font-family:system-ui,sans-serif;background:#080B14;color:#F8FAFC;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
     <div style="text-align:center;padding:24px;max-width:360px;">
-      <p style="font-size:14px;margin:0 0 8px;">${payload.type === 'GOOGLE_AUTH_SUCCESS' ? 'Google sign-in verified. Returning to NexaFlow...' : 'Sign-in could not be completed.'}</p>
+      <p style="font-size:14px;margin:0 0 8px;">${payload.type === 'GOOGLE_AUTH_SUCCESS' ? 'Google sign-in verified. Returning to NexaStudios...' : 'Sign-in could not be completed.'}</p>
       <p style="font-size:12px;color:#94A3B8;margin:0;">This window will close automatically.</p>
     </div>
     <script>

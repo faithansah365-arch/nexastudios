@@ -687,7 +687,7 @@ export function LiveStudioPage() {
       const a = document.createElement('a');
       a.href = recordedUrl;
       const ext = recordedBlob.type.includes('mp4') ? 'mp4' : 'webm';
-      a.download = `${(projectTitle || 'nexaflow-production').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.${ext}`;
+      a.download = `${(projectTitle || 'nexastudios-production').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

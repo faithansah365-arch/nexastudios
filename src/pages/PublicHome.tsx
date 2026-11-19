@@ -22,33 +22,33 @@ export function PublicHome() {
     {
       factor: 'Studio Build & Set Construction',
       traditional: 'Physical sets, acoustic buildout, dedicated room lighting',
-      nexaflow: 'Layered 2.5D virtual backdrops and foreground desks in the browser',
+      nexastudios: 'Layered 2.5D virtual backdrops and foreground desks in the browser',
     },
     {
       factor: 'Hardware Requirements',
       traditional: 'Hardware switchers, capture cards, physical green screen rigs',
-      nexaflow: 'Standard webcam or uploaded video, processed locally via WebGL/WASM',
+      nexastudios: 'Standard webcam or uploaded video, processed locally via WebGL/WASM',
     },
     {
       factor: 'Rebranding Between Shows',
       traditional: 'Manual set swaps and physical banner replacements',
-      nexaflow: 'Instant logo, lower-third, wall screen, and color preset switching',
+      nexastudios: 'Instant logo, lower-third, wall screen, and color preset switching',
     },
     {
       factor: 'Streaming Integration',
       traditional: 'Dedicated broadcast rack for scene composition',
-      nexaflow: 'Clean OBS Browser Source scene output ready for YouTube Live & RTMP',
+      nexastudios: 'Clean OBS Browser Source scene output ready for YouTube Live & RTMP',
     },
   ];
 
   const faqs = [
     {
-      q: 'How does NexaFlow AI Studio process my camera video?',
+      q: 'How does NexaStudios process my camera video?',
       a: 'Person segmentation and layered scene compositing run directly inside your browser using local WebAssembly/WebGL (MediaPipe SelfieSegmenter) or Chroma Key. Your raw camera feed is never uploaded to external AI servers.',
     },
     {
       q: 'Can I place myself behind a virtual desk?',
-      a: 'Yes. NexaFlow uses a layered 2.5D composition architecture: Background Layer, Subject Layer, Foreground Desk/Mask Layer, and Branding Graphics. You adjust subject scale and vertical offset to sit naturally behind the desk.',
+      a: 'Yes. NexaStudios uses a layered 2.5D composition architecture: Background Layer, Subject Layer, Foreground Desk/Mask Layer, and Branding Graphics. You adjust subject scale and vertical offset to sit naturally behind the desk.',
     },
     {
       q: 'Can I upload a photograph of my own church or office?',
@@ -67,7 +67,7 @@ export function PublicHome() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
           <div className="lg:col-span-6 flex flex-col justify-center space-y-6">
             <div className="text-sm font-medium text-[#06B6D4]">
-              NexaFlow Technologies · Virtual Production Platform
+              NexaStudios · Virtual Production Platform
             </div>
             <h1
               className="font-display font-bold tracking-tight text-slate-900 dark:text-white leading-[1.08]"
@@ -107,7 +107,7 @@ export function PublicHome() {
             <div className="relative h-full min-h-[280px] rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-[#111827]">
               <img
                 src="/src/assets/images/hero_virtual_studio_1795011533022.jpg"
-                alt="NexaFlow AI Studio virtual broadcast stage with curved LED backdrop and foreground anchor desk"
+                alt="NexaStudios virtual broadcast stage with curved LED backdrop and foreground anchor desk"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
@@ -255,7 +255,7 @@ export function PublicHome() {
       {/* Traditional vs Virtual Comparison */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 py-16 border-t border-slate-200 dark:border-slate-800/80">
         <h2 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-8">
-          Traditional Studio Production vs. NexaFlow AI Studio
+          Traditional Studio Production vs. NexaStudios
         </h2>
         <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827]">
           <table className="w-full text-left border-collapse">
@@ -263,7 +263,7 @@ export function PublicHome() {
               <tr className="border-b border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-[#94A3B8]">
                 <th className="py-3.5 px-5 font-semibold">Production Requirement</th>
                 <th className="py-3.5 px-5 font-semibold">Traditional Physical Studio</th>
-                <th className="py-3.5 px-5 font-semibold text-[#6366F1]">NexaFlow AI Studio</th>
+                <th className="py-3.5 px-5 font-semibold text-[#6366F1]">NexaStudios</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
@@ -271,7 +271,7 @@ export function PublicHome() {
                 <tr key={row.factor}>
                   <td className="py-4 px-5 font-medium text-slate-900 dark:text-white">{row.factor}</td>
                   <td className="py-4 px-5 text-slate-600 dark:text-[#94A3B8]">{row.traditional}</td>
-                  <td className="py-4 px-5 text-slate-900 dark:text-slate-100">{row.nexaflow}</td>
+                  <td className="py-4 px-5 text-slate-900 dark:text-slate-100">{row.nexastudios}</td>
                 </tr>
               ))}
             </tbody>
@@ -329,7 +329,7 @@ export function PublicHome() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
-                    <span>{p.limits.watermarkRequired ? 'NexaFlow watermark' : 'No watermark'}</span>
+                    <span>{p.limits.watermarkRequired ? 'NexaStudios watermark' : 'No watermark'}</span>
                   </li>
                 </ul>
               </div>

@@ -57,11 +57,11 @@ async function startServer(): Promise<void> {
 
   const port = resolveServerPort();
   httpServer.listen(port, '0.0.0.0', () => {
-    console.log(`NexaFlow AI Studio listening on http://0.0.0.0:${port}`);
+    console.log(`NexaStudios listening on http://0.0.0.0:${port}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start NexaFlow AI Studio server:', err);
+  console.error('Failed to start NexaStudios server:', err);
   process.exit(1);
 });

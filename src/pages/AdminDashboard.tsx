@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../lib/api';
+import { BrandLogo } from '../components/BrandLogo';
 import type {
   AppSettings,
   AuditLog,
@@ -559,8 +560,8 @@ export function AdminDashboard() {
     <div className="min-h-screen bg-[#080B14] text-[#F8FAFC] flex flex-col lg:flex-row">
       <aside className="w-full lg:w-64 border-b lg:border-b-0 lg:border-r border-slate-800 bg-[#111827] p-4 flex flex-col justify-between shrink-0">
         <div className="space-y-4">
-          <div>
-            <div className="font-display text-base font-bold text-white">NexaFlow Admin</div>
+          <div className="space-y-1.5">
+            <BrandLogo size="sm" label="NexaStudios Admin" textClassName="text-white text-base" />
             <div className="text-xs text-[#94A3B8] truncate">{user.email}</div>
           </div>
 

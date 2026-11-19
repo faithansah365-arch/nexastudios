@@ -47,7 +47,7 @@ export function FeaturesPage() {
             Platform Features Built for Real Production
           </h1>
           <p className="mt-3 text-base text-slate-600 dark:text-[#94A3B8]">
-            Every capability in NexaFlow AI Studio runs on open web standards—Canvas, WebGL, Three.js, MediaPipe WASM,
+            Every capability in NexaStudios runs on open web standards—Canvas, WebGL, Three.js, MediaPipe WASM,
             Web Audio API, and MediaRecorder—with honest server-enforced account limits.
           </p>
         </div>
@@ -208,7 +208,7 @@ export function HowItWorksPage() {
     <PublicLayout>
       <section className="max-w-5xl mx-auto px-4 sm:px-6 py-16">
         <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight mb-4">
-          How NexaFlow AI Studio Works
+          How NexaStudios Works
         </h1>
         <p className="text-slate-600 dark:text-[#94A3B8] mb-12">
           A four-stage virtual production pipeline designed to run in standard desktop browsers without external video
@@ -295,12 +295,11 @@ export function AboutPage() {
       <section className="max-w-4xl mx-auto px-4 sm:px-6 py-16 space-y-8">
         <div>
           <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
-            About NexaFlow Technologies
+            About NexaStudios
           </h1>
           <p className="mt-4 text-base text-slate-600 dark:text-[#94A3B8] leading-relaxed">
-            NexaFlow AI Studio is developed by NexaFlow Technologies to make layered virtual production accessible
-            globally without specialized studio construction, expensive hardware switchers, or mandatory cloud render
-            fees.
+            NexaStudios is built to make layered virtual production accessible globally without specialized studio
+            construction, expensive hardware switchers, or mandatory cloud render fees.
           </p>
         </div>
         <div className="p-6 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 space-y-3">
@@ -351,7 +350,7 @@ export function ContactPage() {
     <PublicLayout>
       <section className="max-w-3xl mx-auto px-4 sm:px-6 py-16">
         <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white tracking-tight">
-          Contact NexaFlow Support
+          Contact NexaStudios Support
         </h1>
         <p className="mt-2 text-slate-600 dark:text-[#94A3B8] mb-8">
           Submit a technical question, billing inquiry, or studio template request directly to our support queue.
@@ -469,7 +468,7 @@ export function HelpCenterPage() {
     },
     {
       title: 'Local Processing vs. Server Storage',
-      body: 'Raw camera streams, uploaded videos, and exported WebM/MP4 files are processed locally on your device. Only account records, studio layout settings, and export usage logs are stored on NexaFlow servers.',
+      body: 'Raw camera streams, uploaded videos, and exported WebM/MP4 files are processed locally on your device. Only account records, studio layout settings, and export usage logs are stored on NexaStudios servers.',
     },
   ];
 
@@ -503,7 +502,7 @@ export function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' }) {
       sections: [
         {
           heading: '1. Local Media Processing',
-          text: 'NexaFlow AI Studio processes live webcam video, audio, and uploaded video transformations locally inside your web browser using WebGL, WebAssembly, and MediaRecorder. Raw video recordings are not uploaded to NexaFlow servers.',
+          text: 'NexaStudios processes live webcam video, audio, and uploaded video transformations locally inside your web browser using WebGL, WebAssembly, and MediaRecorder. Raw video recordings are not uploaded to NexaStudios servers.',
         },
         {
           heading: '2. Account & Configuration Data',
@@ -521,7 +520,7 @@ export function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' }) {
       sections: [
         {
           heading: '1. Acceptable Use & Media Ownership',
-          text: 'You retain full ownership of the videos, images, and logos you produce or upload using NexaFlow AI Studio. You must only upload studio photography or media you have legal rights to use.',
+          text: 'You retain full ownership of the videos, images, and logos you produce or upload using NexaStudios. You must only upload studio photography or media you have legal rights to use.',
         },
         {
           heading: '2. Plan Quotas & Abuse Prevention',
@@ -547,7 +546,7 @@ export function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' }) {
         },
         {
           heading: '3. Refund Eligibility',
-          text: 'If a verified duplicate charge or technical billing error occurs, contact NexaFlow Support within 7 days with your Paystack transaction reference for review.',
+          text: 'If a verified duplicate charge or technical billing error occurs, contact NexaStudios Support within 7 days with your Paystack transaction reference for review.',
         },
       ],
     },

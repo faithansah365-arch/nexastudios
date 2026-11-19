@@ -67,7 +67,7 @@ function GoogleSignInButton({
     try {
       const originParam = encodeURIComponent(window.location.origin);
       const { url } = await apiRequest<{ url: string }>(`/api/auth/google/url?origin=${originParam}`);
-      const popup = window.open(url, 'nexaflow_google_oauth', 'width=520,height=640');
+      const popup = window.open(url, 'nexastudios_google_oauth', 'width=520,height=640');
       if (!popup) {
         setLoading(false);
         onError('Popup was blocked by your browser. Please allow popups for this site and try again.');
@@ -198,7 +198,7 @@ export function SignInPage() {
       <div className="max-w-md mx-auto px-4 py-16">
         <div className="p-7 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 space-y-6">
           <div>
-            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white">Sign in to NexaFlow</h1>
+            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white">Sign in to NexaStudios</h1>
             <p className="text-sm text-slate-600 dark:text-[#94A3B8] mt-1">
               Access your virtual studios, recordings, and subscription entitlements.
             </p>
@@ -297,7 +297,7 @@ export function SignInPage() {
           />
 
           <p className="text-xs text-center text-slate-600 dark:text-[#94A3B8]">
-            New to NexaFlow AI Studio?{' '}
+            New to NexaStudios?{' '}
             <Link to="/signup" className="text-[#6366F1] font-semibold hover:underline">
               Create an account
             </Link>

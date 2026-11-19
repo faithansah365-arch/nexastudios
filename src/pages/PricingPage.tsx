@@ -367,7 +367,7 @@ export function PricingPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
-                        <span>{p.limits.watermarkRequired ? 'NexaFlow watermark' : 'No watermark'}</span>
+                        <span>{p.limits.watermarkRequired ? 'NexaStudios watermark' : 'No watermark'}</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="w-3.5 h-3.5 text-[#10B981] shrink-0" />

@@ -507,7 +507,7 @@ adminRouter.post('/settings/sync-exchange-rate', async (req: AuthenticatedReques
 adminRouter.post('/mfa/setup', async (req: AuthenticatedRequest, res) => {
   const secret = generateTotpSecret();
   await db.updateUser(req.authUser!.id, { mfaSecret: secret });
-  const issuer = encodeURIComponent('NexaFlow AI Studio');
+  const issuer = encodeURIComponent('NexaStudios');
   const label = encodeURIComponent(req.authUser!.email);
   const otpauthUrl = `otpauth://totp/${issuer}:${label}?secret=${secret}&issuer=${issuer}`;
   res.json({ secret, otpauthUrl });

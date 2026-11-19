@@ -399,7 +399,7 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
   // 6. Free Plan Watermark
   if (scene.watermarkRequired) {
     ctx.save();
-    const text = 'NexaFlow AI Studio';
+    const text = 'NexaStudios';
     ctx.font = `600 ${Math.max(13, Math.round(h * 0.024))}px Outfit, sans-serif`;
     const metrics = ctx.measureText(text);
     const padX = 14;

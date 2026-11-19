@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../lib/api';
+import { BrandLogo } from './BrandLogo';
 
 export function DashboardLayout({ children, title }: { children: React.ReactNode; title: string }) {
   const { user, plan, theme, toggleTheme, logout, refreshAuth } = useAuth();
@@ -92,15 +93,17 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
       {/* Desktop Sidebar */}
       <aside
         className={`hidden lg:flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] shrink-0 transition-all duration-150 ${
-          collapsed ? 'w-[68px]' : 'w-[256px]'
+          collapsed ? 'w-[76px]' : 'w-[256px]'
         }`}
       >
-        <div className="h-14 px-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-          {!collapsed && (
-            <Link to="/" className="font-display text-sm font-bold tracking-tight truncate">
-              NexaFlow AI Studio
-            </Link>
-          )}
+        <div
+          className={`h-14 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between ${
+            collapsed ? 'px-2 gap-1' : 'px-4 gap-2'
+          }`}
+        >
+          <Link to="/" aria-label="NexaStudios Home" className="min-w-0 flex items-center">
+            <BrandLogo compact={collapsed} size="sm" />
+          </Link>
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
@@ -150,7 +153,9 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
           <div className="fixed inset-0 bg-black/60" onClick={() => setMobileOpen(false)} />
           <aside className="relative w-72 max-w-[85vw] bg-white dark:bg-[#111827] h-full flex flex-col border-r border-slate-200 dark:border-slate-800">
             <div className="h-14 px-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <span className="font-display text-sm font-bold">NexaFlow AI Studio</span>
+              <Link to="/" onClick={() => setMobileOpen(false)} className="inline-flex items-center">
+                <BrandLogo size="sm" />
+              </Link>
               <button
                 type="button"
                 onClick={() => setMobileOpen(false)}
