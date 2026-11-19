@@ -44,7 +44,27 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+              title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-4 h-4 text-amber-400" />
+                  <span className="hidden sm:inline">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-4 h-4 text-[#6366F1]" />
+                  <span className="hidden sm:inline">Dark</span>
+                </>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => navigate(user ? '/dashboard' : '/signup')}
@@ -117,14 +137,6 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
             <p className="text-sm text-slate-600 dark:text-[#94A3B8] leading-relaxed">
               Your Studio. Anywhere. Built by NexaFlow Technologies for creators, churches, educators, and media teams.
             </p>
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="inline-flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-[#6366F1] py-1.5"
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              <span>{theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}</span>
-            </button>
           </div>
 
           <div>

@@ -135,14 +135,6 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
         <div className="p-2 border-t border-slate-200 dark:border-slate-800 space-y-1">
           <button
             type="button"
-            onClick={toggleTheme}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-slate-600 dark:text-[#94A3B8] hover:bg-slate-100 dark:hover:bg-[#172033]"
-          >
-            {theme === 'dark' ? <Sun className="w-4 h-4 shrink-0" /> : <Moon className="w-4 h-4 shrink-0" />}
-            {!collapsed && <span>{theme === 'dark' ? 'Light Theme' : 'Dark Theme'}</span>}
-          </button>
-          <button
-            type="button"
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-slate-600 dark:text-[#94A3B8] hover:text-red-400 hover:bg-slate-100 dark:hover:bg-[#172033]"
           >
@@ -220,10 +212,29 @@ export function DashboardLayout({ children, title }: { children: React.ReactNode
             </div>
           </div>
 
-          <div className="flex items-center gap-4 text-xs shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 text-xs shrink-0">
             <span className="hidden sm:inline text-slate-500 dark:text-[#94A3B8]">
               {user?.name} · {plan?.name || 'Free'} Plan
             </span>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+              title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden md:inline">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-[#6366F1]" />
+                  <span className="hidden md:inline">Dark</span>
+                </>
+              )}
+            </button>
             {user?.role === 'admin' && (
               <Link
                 to="/admin"
