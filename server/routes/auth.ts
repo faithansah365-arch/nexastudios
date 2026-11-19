@@ -12,7 +12,9 @@ import {
   requireAuth,
   resolveEntitlements,
   SESSION_COOKIE_NAME,
+  signEphemeralPayload,
   validatePasswordStrength,
+  verifyEphemeralPayload,
   verifyPassword,
   verifyTotpCode,
   type AuthenticatedRequest,
@@ -24,6 +26,71 @@ const authRateLimit = rateLimit('auth', 20, 15 * 60 * 1000);
 
 function isValidEmail(email: string): boolean {
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && email.length <= 200;
+}
+
+function getGoogleOAuthCredentials(): { clientId: string; clientSecret: string } | null {
+  const clientId = (process.env.GOOGLE_CLIENT_ID || process.env.OAUTH_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || process.env.OAUTH_CLIENT_SECRET || '').trim();
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
+function resolveGoogleRedirectUri(req: AuthenticatedRequest): string {
+  const explicit = process.env.GOOGLE_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+
+  const queryOrigin = typeof req.query.origin === 'string' ? req.query.origin.trim().replace(/\/+$/, '') : '';
+  if (/^(https:\/\/[a-z0-9.-]+(:\d+)?|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?)$/i.test(queryOrigin)) {
+    return `${queryOrigin}/api/auth/google/callback`;
+  }
+
+  const forwardedHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+  if (forwardedHost && !forwardedHost.startsWith('localhost') && !forwardedHost.startsWith('127.0.0.1')) {
+    const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim() || 'https';
+    return `${proto}://${forwardedHost}/api/auth/google/callback`;
+  }
+
+  const appUrl = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (appUrl) {
+    return `${appUrl}/api/auth/google/callback`;
+  }
+
+  return 'http://localhost:3000/api/auth/google/callback';
+}
+
+function renderGoogleCallbackHtml(payload: { type: 'GOOGLE_AUTH_SUCCESS'; exchangeCode: string } | { type: 'GOOGLE_AUTH_ERROR'; error: string }): string {
+  const safeJson = JSON.stringify(payload).replace(/</g, '\\u003c');
+  const fallbackUrl =
+    payload.type === 'GOOGLE_AUTH_SUCCESS'
+      ? `/signin?google_code=${encodeURIComponent(payload.exchangeCode)}`
+      : `/signin?google_error=${encodeURIComponent(payload.error)}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>NexaFlow Google Sign-In</title>
+  </head>
+  <body style="font-family:system-ui,sans-serif;background:#080B14;color:#F8FAFC;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
+    <div style="text-align:center;padding:24px;max-width:360px;">
+      <p style="font-size:14px;margin:0 0 8px;">${payload.type === 'GOOGLE_AUTH_SUCCESS' ? 'Google sign-in verified. Returning to NexaFlow...' : 'Sign-in could not be completed.'}</p>
+      <p style="font-size:12px;color:#94A3B8;margin:0;">This window will close automatically.</p>
+    </div>
+    <script>
+      (function () {
+        var data = ${safeJson};
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(data, '*');
+            window.close();
+            return;
+          }
+        } catch (e) {}
+        window.location.replace(${JSON.stringify(fallbackUrl)});
+      })();
+    </script>
+  </body>
+</html>`;
 }
 
 authRouter.get('/me', async (req: AuthenticatedRequest, res) => {
@@ -302,4 +369,204 @@ authRouter.delete('/account', requireAuth, async (req: AuthenticatedRequest, res
   await db.deleteUserAndData(req.authUser!.id);
   clearSessionCookie(res, req);
   res.json({ ok: true });
+});
+
+// ---- Pure MongoDB/SQLite Google OAuth 2.0 Sign-In (Zero Firebase) ----
+authRouter.get('/google/status', (req: AuthenticatedRequest, res) => {
+  const creds = getGoogleOAuthCredentials();
+  res.json({
+    configured: Boolean(creds),
+    redirectUri: resolveGoogleRedirectUri(req),
+  });
+});
+
+authRouter.get('/google/url', (req: AuthenticatedRequest, res) => {
+  const creds = getGoogleOAuthCredentials();
+  const redirectUri = resolveGoogleRedirectUri(req);
+  if (!creds) {
+    res.status(503).json({
+      error: `Google Sign-In is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your server environment and whitelist callback URL: ${redirectUri}`,
+      code: 'GOOGLE_OAUTH_NOT_CONFIGURED',
+      redirectUri,
+    });
+    return;
+  }
+
+  const state = signEphemeralPayload(
+    {
+      nonce: crypto.randomBytes(12).toString('hex'),
+      redirectUri,
+    },
+    10 * 60 * 1000
+  );
+
+  const params = new URLSearchParams({
+    client_id: creds.clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+    state,
+  });
+
+  res.json({
+    url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+    redirectUri,
+  });
+});
+
+async function handleGoogleCallback(req: AuthenticatedRequest, res: import('express').Response): Promise<void> {
+  const creds = getGoogleOAuthCredentials();
+  if (!creds) {
+    res.status(503).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Google OAuth credentials are not configured on the server.' }));
+    return;
+  }
+
+  const oauthError = typeof req.query.error === 'string' ? req.query.error : '';
+  if (oauthError) {
+    res.status(400).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Google sign-in was cancelled or denied.' }));
+    return;
+  }
+
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const stateToken = typeof req.query.state === 'string' ? req.query.state : '';
+  const verifiedState = verifyEphemeralPayload<{ nonce?: string; redirectUri?: string }>(stateToken);
+  if (!code || !verifiedState?.redirectUri) {
+    res.status(400).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Invalid or expired Google OAuth session state.' }));
+    return;
+  }
+
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: creds.clientId,
+        client_secret: creds.clientSecret,
+        redirect_uri: verifiedState.redirectUri,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const detail = await tokenRes.text().catch(() => '');
+      console.error('[Google OAuth Token Error]', tokenRes.status, detail);
+      res.status(401).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Failed to verify Google authorization code.' }));
+      return;
+    }
+
+    const tokenData = (await tokenRes.json()) as { access_token?: string };
+    if (!tokenData.access_token) {
+      res.status(401).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Google did not return an access token.' }));
+      return;
+    }
+
+    const userInfoRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    if (!userInfoRes.ok) {
+      res.status(401).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Unable to load Google profile information.' }));
+      return;
+    }
+
+    const profile = (await userInfoRes.json()) as {
+      sub?: string;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+    };
+
+    const email = profile.email?.trim().toLowerCase();
+    const googleId = profile.sub?.trim();
+    if (!email || !googleId || profile.email_verified === false) {
+      res.status(400).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Your Google account must have a verified email address.' }));
+      return;
+    }
+
+    let user = (await db.findUserByGoogleId(googleId)) || (await db.findUserByEmail(email));
+    if (user) {
+      if (user.status === 'suspended') {
+        res.status(403).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'This account has been suspended. Contact support for assistance.' }));
+        return;
+      }
+      if (!user.googleId || !user.emailVerified) {
+        await db.updateUser(user.id, {
+          googleId,
+          emailVerified: true,
+          verificationToken: null,
+          verificationExpiresAt: null,
+        });
+        user = (await db.findUserById(user.id)) || user;
+      }
+    } else {
+      const now = new Date().toISOString();
+      const newUser = {
+        id: crypto.randomUUID(),
+        name: (profile.name || email.split('@')[0] || 'Creator').trim().slice(0, 80),
+        email,
+        passwordHash: hashPassword(crypto.randomBytes(32).toString('hex')),
+        googleId,
+        authProvider: 'google' as const,
+        emailVerified: true,
+        verificationToken: null,
+        verificationExpiresAt: null,
+        resetToken: null,
+        resetExpiresAt: null,
+        role: 'free' as const,
+        status: 'active' as const,
+        mfaEnabled: false,
+        mfaSecret: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.createUser(newUser);
+      await resolveEntitlements(newUser);
+      user = newUser;
+    }
+
+    const exchangeCode = signEphemeralPayload(
+      { userId: user.id, purpose: 'google_signin' },
+      2 * 60 * 1000
+    );
+
+    res.send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_SUCCESS', exchangeCode }));
+  } catch (err) {
+    console.error('[Google OAuth Callback Error]', err);
+    res.status(500).send(renderGoogleCallbackHtml({ type: 'GOOGLE_AUTH_ERROR', error: 'Unexpected error completing Google sign-in.' }));
+  }
+}
+
+authRouter.get(['/google/callback', '/google/callback/'], handleGoogleCallback);
+
+authRouter.post('/google/complete', authRateLimit, async (req, res) => {
+  const { exchangeCode } = req.body ?? {};
+  const payload = verifyEphemeralPayload<{ userId?: string; purpose?: string }>(exchangeCode);
+  if (!payload || payload.purpose !== 'google_signin' || typeof payload.userId !== 'string') {
+    res.status(401).json({ error: 'Google sign-in session expired. Please try again.' });
+    return;
+  }
+
+  const user = await db.findUserById(payload.userId);
+  if (!user) {
+    res.status(404).json({ error: 'Account not found.' });
+    return;
+  }
+  if (user.status === 'suspended') {
+    res.status(403).json({ error: 'This account has been suspended. Contact support for assistance.' });
+    return;
+  }
+
+  await createSessionForUser(user.id, req, res);
+  const ent = await resolveEntitlements(user);
+  const savedStudiosCount = await db.countStudiosByUser(user.id);
+
+  res.json({
+    user: toPublicUser(user),
+    subscription: ent.subscription,
+    plan: ent.plan,
+    usage: ent.usage,
+    savedStudiosCount,
+  });
 });

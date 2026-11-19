@@ -1,14 +1,22 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
+import { GoogleGenAI, Type } from '@google/genai';
 import { Router } from 'express';
-import { db, getUploadDir } from '../db.ts';
+import { db } from '../db.ts';
 import { rateLimit, requireAuth, type AuthenticatedRequest } from '../security.ts';
 import type { CustomStudio, ExportRecord, ExportResolution, ProjectRecord } from '../../shared/types.ts';
+import {
+  clampTeleprompterFontSize,
+  estimateReadingSeconds,
+  wpmToScrollPxPerSec,
+  type TeleprompterAiMode,
+  type TeleprompterAiResponse,
+  type TeleprompterTone,
+} from '../../shared/teleprompter.ts';
 
 export const studioRouter = Router();
 
 const exportRateLimit = rateLimit('export_auth', 20, 60 * 1000);
+const teleprompterAiRateLimit = rateLimit('teleprompter_ai', 20, 60 * 1000);
 
 const RESOLUTION_RANK: Record<ExportResolution, number> = {
   '720p': 1,
@@ -212,8 +220,8 @@ studioRouter.post('/studios/upload-image', requireAuth, async (req: Authenticate
   }
 
   const fileName = `${req.authUser!.id.slice(0, 8)}_${crypto.randomBytes(12).toString('hex')}.${ext}`;
-  const outPath = path.join(getUploadDir(), fileName);
-  fs.writeFileSync(outPath, buf);
+  const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  await db.saveUploadedAsset(fileName, mimeType, buf);
 
   res.status(201).json({
     url: `/uploads/${fileName}`,
@@ -358,4 +366,167 @@ studioRouter.post('/exports/:id/fail', requireAuth, async (req: AuthenticatedReq
   }
   const usage = await db.getOrCreateUsage(req.authUser!.id);
   res.json({ ok: true, refunded: existing.status === 'authorized', usage });
+});
+
+// ---- AI Teleprompter Script & Pacing Assistant (Server-Side Gemini) ----
+const ALLOWED_AI_MODES = new Set<TeleprompterAiMode>(['generate', 'polish', 'pacing']);
+const ALLOWED_TONES = new Set<TeleprompterTone>([
+  'conversational',
+  'broadcast',
+  'executive',
+  'sermon',
+  'educational',
+]);
+
+studioRouter.post('/studios/teleprompter-ai', teleprompterAiRateLimit, requireAuth, async (req: AuthenticatedRequest, res) => {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    res.status(503).json({
+      error: 'AI teleprompter assistant requires GEMINI_API_KEY to be configured on the server.',
+      code: 'GEMINI_NOT_CONFIGURED',
+    });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const mode: TeleprompterAiMode = ALLOWED_AI_MODES.has(body.mode) ? body.mode : 'generate';
+  const tone: TeleprompterTone = ALLOWED_TONES.has(body.tone) ? body.tone : 'conversational';
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 1500) : '';
+  const script = typeof body.script === 'string' ? body.script.trim().slice(0, 12000) : '';
+  const fontSize = clampTeleprompterFontSize(Number(body.fontSize || 24));
+  const targetSeconds = Math.max(15, Math.min(900, Math.round(Number(body.targetSeconds || 60))));
+
+  if (mode === 'generate' && prompt.length < 3) {
+    res.status(400).json({ error: 'Enter a topic or brief outline (at least 3 characters) to generate a script.' });
+    return;
+  }
+  if ((mode === 'polish' || mode === 'pacing') && script.length < 10) {
+    res.status(400).json({ error: 'Provide at least a short draft script (10+ characters) before running AI polish or pacing.' });
+    return;
+  }
+
+  const targetWordCount = Math.max(35, Math.round((targetSeconds / 60) * 135));
+
+  const systemInstruction = [
+    'You are a broadcast teleprompter producer helping a presenter speak naturally while maintaining direct eye contact with a webcam lens.',
+    'Format scripts with short, single-breath sentences and clear paragraph breaks so eyes never lose their line.',
+    'Use subtle [PAUSE] markers only at key breath transitions—never markdown bullets, headers, hashtags, or stage directions in parentheses.',
+    'Return strictly valid JSON matching the requested schema.',
+  ].join(' ');
+
+  let userPrompt = '';
+  if (mode === 'generate') {
+    userPrompt = [
+      `Write a spoken-delivery teleprompter script in a ${tone} tone.`,
+      `Target spoken duration: roughly ${targetSeconds} seconds (~${targetWordCount} words).`,
+      `Topic / talking points:\n${prompt}`,
+      'Recommend an ideal speaking rate (recommendedWpm between 110 and 165) and one concise camera-eye-contact delivery tip.',
+    ].join('\n\n');
+  } else if (mode === 'polish') {
+    userPrompt = [
+      `Rewrite and polish the following draft for effortless teleprompter reading in a ${tone} tone.`,
+      'Keep the presenter’s core meaning and facts, shorten overly long clauses for natural breath control, and add subtle [PAUSE] beats where helpful.',
+      `Draft script:\n${script}`,
+      'Recommend an ideal speaking rate (recommendedWpm between 110 and 165) and one concise delivery tip.',
+    ].join('\n\n');
+  } else {
+    userPrompt = [
+      `Analyze the pacing and cadence of this teleprompter script for a ${tone} delivery.`,
+      'Return the script unchanged (unless fixing broken line breaks for easier eye scanning), recommend the ideal speaking rate (recommendedWpm between 110 and 165), estimate spoken duration in seconds, and give one concise eye-contact/pacing tip.',
+      `Script:\n${script}`,
+    ].join('\n\n');
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: userPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            script: {
+              type: Type.STRING,
+              description: 'Teleprompter-formatted spoken script with short eye-friendly lines and occasional [PAUSE] cues.',
+            },
+            recommendedWpm: {
+              type: Type.NUMBER,
+              description: 'Recommended speaking pace in words per minute (110 to 165).',
+            },
+            estimatedDurationSeconds: {
+              type: Type.NUMBER,
+              description: 'Estimated spoken runtime in seconds at the recommended WPM.',
+            },
+            deliveryTip: {
+              type: Type.STRING,
+              description: 'One concise tip for eye contact, tone, or pacing on camera.',
+            },
+          },
+          required: ['script', 'recommendedWpm', 'estimatedDurationSeconds', 'deliveryTip'],
+        },
+      },
+    });
+
+    const rawText = response.text;
+    if (!rawText) {
+      res.status(502).json({ error: 'Gemini returned an empty response. Please try again.' });
+      return;
+    }
+
+    const parsed = JSON.parse(rawText) as {
+      script?: unknown;
+      recommendedWpm?: unknown;
+      estimatedDurationSeconds?: unknown;
+      deliveryTip?: unknown;
+    };
+
+    const outputScript =
+      typeof parsed.script === 'string' && parsed.script.trim()
+        ? parsed.script.trim()
+        : mode === 'pacing'
+          ? script
+          : '';
+
+    if (!outputScript) {
+      res.status(502).json({ error: 'AI response did not contain a valid teleprompter script.' });
+      return;
+    }
+
+    const recommendedWpm = Math.round(
+      Math.max(100, Math.min(180, Number(parsed.recommendedWpm) || 135))
+    );
+    const recommendedSpeedPxPerSec = wpmToScrollPxPerSec(recommendedWpm, fontSize);
+    const estimatedDurationSeconds =
+      Number.isFinite(Number(parsed.estimatedDurationSeconds)) && Number(parsed.estimatedDurationSeconds) > 0
+        ? Math.round(Number(parsed.estimatedDurationSeconds))
+        : estimateReadingSeconds(outputScript, recommendedWpm);
+    const deliveryTip =
+      typeof parsed.deliveryTip === 'string' && parsed.deliveryTip.trim()
+        ? parsed.deliveryTip.trim().slice(0, 220)
+        : 'Keep your eyes anchored inside the cyan lens-line band and pause gently at [PAUSE] cues.';
+
+    const payload: TeleprompterAiResponse = {
+      script: outputScript,
+      recommendedWpm,
+      recommendedSpeedPxPerSec,
+      estimatedDurationSeconds,
+      deliveryTip,
+    };
+
+    res.json(payload);
+  } catch (err) {
+    console.error('[Teleprompter AI Error]', err);
+    const message =
+      err instanceof Error && err.message
+        ? `AI teleprompter request failed: ${err.message}`
+        : 'AI teleprompter request failed. Please try again.';
+    res.status(502).json({ error: message });
+  }
 });

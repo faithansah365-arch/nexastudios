@@ -1,21 +1,8 @@
-import 'dotenv/config';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import express, { type NextFunction, type Request, type Response } from 'express';
-import cookieParser from 'cookie-parser';
-import { db, getUploadDir } from './server/db.ts';
-import {
-  attachSession,
-  getSessionSecret,
-  invalidateAdminBootstrapToken,
-  isBootstrapTokenRequired,
-} from './server/security.ts';
-import { authRouter } from './server/routes/auth.ts';
-import { studioRouter } from './server/routes/studio.ts';
-import { billingRouter, type RawBodyRequest } from './server/routes/billing.ts';
-import { supportRouter } from './server/routes/support.ts';
-import { adminRouter } from './server/routes/admin.ts';
+import express from 'express';
+import { attachGlobalErrorHandler, createApiExpressApp, ensureBackendReady } from './server/app.ts';
 
 function resolveServerPort(): number {
   const args = process.argv.slice(2);
@@ -36,72 +23,10 @@ function resolveServerPort(): number {
 }
 
 async function startServer(): Promise<void> {
-  await db.init();
-  getSessionSecret();
+  await ensureBackendReady();
 
-  const adminCount = await db.countAdmins();
-  if (adminCount === 0) {
-    if (isBootstrapTokenRequired()) {
-      console.log(
-        '[ADMIN BOOTSTRAP] No administrator provisioned yet. Visit /admin and provide INITIAL_ADMIN_PROVISION_TOKEN.'
-      );
-    } else {
-      invalidateAdminBootstrapToken();
-      console.log('[ADMIN BOOTSTRAP] No administrator provisioned yet. Visit /admin to create the initial administrator account.');
-    }
-  }
-
-  const app = express();
+  const app = createApiExpressApp();
   const httpServer = http.createServer(app);
-  app.set('trust proxy', 1);
-
-  // Baseline security headers compatible with embedded preview frames
-  app.use((_req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self)');
-    next();
-  });
-
-  app.use(
-    express.json({
-      limit: '12mb',
-      verify: (req, _res, buf) => {
-        (req as RawBodyRequest).rawBody = buf;
-      },
-    })
-  );
-  app.use(cookieParser());
-  app.use(attachSession);
-
-  // Serve validated user-uploaded studio assets safely
-  app.use(
-    '/uploads',
-    express.static(getUploadDir(), {
-      fallthrough: false,
-      setHeaders: (res) => {
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-      },
-    })
-  );
-
-  // Healthcheck
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, databaseEngine: db.getEngine(), timestamp: new Date().toISOString() });
-  });
-
-  // API Routers
-  app.use('/api/auth', authRouter);
-  app.use('/api', studioRouter);
-  app.use('/api', billingRouter);
-  app.use('/api', supportRouter);
-  app.use('/api/admin', adminRouter);
-
-  // API 404 handler
-  app.use('/api', (_req, res) => {
-    res.status(404).json({ error: 'API endpoint not found.' });
-  });
 
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
@@ -128,13 +53,7 @@ async function startServer(): Promise<void> {
     });
   }
 
-  // Global error handler — never leak raw stack traces to ordinary users
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('[Server Error]', err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'An unexpected server error occurred. Please try again.' });
-    }
-  });
+  attachGlobalErrorHandler(app);
 
   const port = resolveServerPort();
   httpServer.listen(port, '0.0.0.0', () => {

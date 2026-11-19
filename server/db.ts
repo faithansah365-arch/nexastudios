@@ -1,7 +1,8 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { MongoClient, type Db as MongoDb } from 'mongodb';
 import type {
   AppSettings,
@@ -23,6 +24,8 @@ import type {
 
 export interface StoredUser extends PublicUser {
   passwordHash: string;
+  googleId?: string | null;
+  authProvider?: 'local' | 'google';
   verificationToken?: string | null;
   verificationExpiresAt?: string | null;
   resetToken?: string | null;
@@ -51,12 +54,24 @@ export interface TeamMembershipRecord {
   createdAt: string;
 }
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+function resolveDataDir(): string {
+  const isServerless = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
+  if (isServerless) {
+    return path.join(os.tmpdir(), 'nexaflow-data');
+  }
+  return path.resolve(process.cwd(), 'data');
+}
+
+const DATA_DIR = resolveDataDir();
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
 export function ensureDataDirectories(): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  } catch {
+    // Read-only filesystem in restricted serverless containers; MongoDB handles persistence
+  }
 }
 
 export function getDataDir(): string {
@@ -461,36 +476,58 @@ class NexaDatabase {
   private mongo: MongoDb | null = null;
   private engine: 'sqlite_local' | 'mongodb_atlas' = 'sqlite_local';
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
 
   async init(customSqlitePath?: string): Promise<void> {
     if (this.initialized) return;
-    ensureDataDirectories();
-
-    const mongoUri = process.env.MONGODB_URI?.trim();
-    if (mongoUri && !customSqlitePath) {
-      try {
-        this.mongoClient = new MongoClient(mongoUri);
-        await this.mongoClient.connect();
-        this.mongo = this.mongoClient.db(process.env.MONGODB_DB_NAME || 'nexaflow_studio');
-        this.engine = 'mongodb_atlas';
-        await this.initMongoIndexes();
-        await this.seedDefaults();
-        this.initialized = true;
-        console.log('[DB] Connected to MongoDB Atlas');
-        return;
-      } catch (err) {
-        console.error('[DB] MongoDB Atlas connection failed, falling back to local SQLite:', err);
-      }
+    if (this.initPromise && !customSqlitePath) {
+      return this.initPromise;
     }
 
-    const dbPath = customSqlitePath || path.join(DATA_DIR, 'nexaflow.db');
-    this.sqlite = new DatabaseSync(dbPath);
-    this.sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-    this.initSqliteSchema();
-    this.engine = 'sqlite_local';
-    await this.seedDefaults();
-    this.initialized = true;
-    console.log(`[DB] Connected to local SQLite (${dbPath})`);
+    const runInit = async () => {
+      if (this.initialized) return;
+      ensureDataDirectories();
+
+      const mongoUri = process.env.MONGODB_URI?.trim();
+      if (mongoUri && !customSqlitePath) {
+        try {
+          this.mongoClient = new MongoClient(mongoUri, {
+            serverSelectionTimeoutMS: 8000,
+            maxPoolSize: 10,
+          });
+          await this.mongoClient.connect();
+          this.mongo = this.mongoClient.db(process.env.MONGODB_DB_NAME || 'nexaflow_studio');
+          this.engine = 'mongodb_atlas';
+          await this.initMongoIndexes();
+          await this.seedDefaults();
+          this.initialized = true;
+          console.log('[DB] Connected to MongoDB Atlas');
+          return;
+        } catch (err) {
+          console.error('[DB] MongoDB Atlas connection failed, falling back to local SQLite:', err);
+        }
+      }
+
+      const { DatabaseSync: SqliteDatabaseSync } = await import('node:sqlite');
+      const dbPath = customSqlitePath || path.join(DATA_DIR, 'nexaflow.db');
+      this.sqlite = new SqliteDatabaseSync(dbPath);
+      this.sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+      this.initSqliteSchema();
+      this.engine = 'sqlite_local';
+      await this.seedDefaults();
+      this.initialized = true;
+      console.log(`[DB] Connected to local SQLite (${dbPath})`);
+    };
+
+    if (!customSqlitePath) {
+      this.initPromise = runInit().catch((err) => {
+        this.initPromise = null;
+        throw err;
+      });
+      return this.initPromise;
+    }
+
+    return runInit();
   }
 
   getEngine(): 'sqlite_local' | 'mongodb_atlas' {
@@ -731,6 +768,13 @@ class NexaDatabase {
         // Column already exists
       }
     }
+    for (const col of ['googleId TEXT', "authProvider TEXT DEFAULT 'local'"]) {
+      try {
+        this.sqlite.exec(`ALTER TABLE users ADD COLUMN ${col}`);
+      } catch {
+        // Column already exists
+      }
+    }
   }
 
   private async initMongoIndexes(): Promise<void> {
@@ -815,12 +859,24 @@ class NexaDatabase {
     return row ? this.mapSqliteUser(row) : null;
   }
 
+  async findUserByGoogleId(googleId: string): Promise<StoredUser | null> {
+    if (!googleId) return null;
+    if (this.mongo) {
+      const doc = await this.mongo.collection('users').findOne({ googleId });
+      return doc ? (doc as unknown as StoredUser) : null;
+    }
+    const row = this.sqlite!.prepare(`SELECT * FROM users WHERE googleId = ?`).get(googleId) as Record<string, unknown> | undefined;
+    return row ? this.mapSqliteUser(row) : null;
+  }
+
   private mapSqliteUser(row: Record<string, unknown>): StoredUser {
     return {
       id: String(row.id),
       name: String(row.name),
       email: String(row.email),
       passwordHash: String(row.passwordHash),
+      googleId: row.googleId ? String(row.googleId) : null,
+      authProvider: row.authProvider === 'google' ? 'google' : 'local',
       emailVerified: Boolean(row.emailVerified),
       verificationToken: row.verificationToken ? String(row.verificationToken) : null,
       verificationExpiresAt: row.verificationExpiresAt ? String(row.verificationExpiresAt) : null,
@@ -841,13 +897,15 @@ class NexaDatabase {
       return;
     }
     this.sqlite!.prepare(`
-      INSERT INTO users (id, name, email, passwordHash, emailVerified, verificationToken, verificationExpiresAt, resetToken, resetExpiresAt, role, status, mfaEnabled, mfaSecret, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, email, passwordHash, googleId, authProvider, emailVerified, verificationToken, verificationExpiresAt, resetToken, resetExpiresAt, role, status, mfaEnabled, mfaSecret, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       user.id,
       user.name,
       user.email,
       user.passwordHash,
+      user.googleId ?? null,
+      user.authProvider ?? 'local',
       user.emailVerified ? 1 : 0,
       user.verificationToken ?? null,
       user.verificationExpiresAt ?? null,
@@ -872,12 +930,14 @@ class NexaDatabase {
     if (!current) return;
     const merged = { ...current, ...patch, updatedAt };
     this.sqlite!.prepare(`
-      UPDATE users SET name=?, email=?, passwordHash=?, emailVerified=?, verificationToken=?, verificationExpiresAt=?, resetToken=?, resetExpiresAt=?, role=?, status=?, mfaEnabled=?, mfaSecret=?, updatedAt=?
+      UPDATE users SET name=?, email=?, passwordHash=?, googleId=?, authProvider=?, emailVerified=?, verificationToken=?, verificationExpiresAt=?, resetToken=?, resetExpiresAt=?, role=?, status=?, mfaEnabled=?, mfaSecret=?, updatedAt=?
       WHERE id=?
     `).run(
       merged.name,
       merged.email,
       merged.passwordHash,
+      merged.googleId ?? null,
+      merged.authProvider ?? 'local',
       merged.emailVerified ? 1 : 0,
       merged.verificationToken ?? null,
       merged.verificationExpiresAt ?? null,
@@ -1834,6 +1894,45 @@ class NexaDatabase {
     `).run(JSON.stringify(settings), now);
   }
 
+  // ---- UPLOADED ASSETS (Serverless MongoDB persistence + local disk fallback) ----
+  async saveUploadedAsset(fileName: string, mimeType: string, data: Buffer): Promise<void> {
+    if (this.mongo) {
+      await this.mongo.collection('uploaded_assets').updateOne(
+        { fileName },
+        {
+          $set: {
+            fileName,
+            mimeType,
+            dataBase64: data.toString('base64'),
+            createdAt: new Date().toISOString(),
+          },
+        },
+        { upsert: true }
+      );
+      return;
+    }
+    ensureDataDirectories();
+    fs.writeFileSync(path.join(UPLOAD_DIR, fileName), data);
+  }
+
+  async getUploadedAsset(fileName: string): Promise<{ mimeType: string; data: Buffer } | null> {
+    if (this.mongo) {
+      const doc = (await this.mongo.collection('uploaded_assets').findOne({ fileName })) as
+        | { mimeType?: string; dataBase64?: string }
+        | null;
+      if (doc?.dataBase64 && doc.mimeType) {
+        return { mimeType: doc.mimeType, data: Buffer.from(doc.dataBase64, 'base64') };
+      }
+    }
+    const localPath = path.join(UPLOAD_DIR, fileName);
+    if (fs.existsSync(localPath)) {
+      const ext = path.extname(fileName).toLowerCase();
+      const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      return { mimeType, data: fs.readFileSync(localPath) };
+    }
+    return null;
+  }
+
   async close(): Promise<void> {
     if (this.sqlite) {
       this.sqlite.close();
@@ -1845,6 +1944,7 @@ class NexaDatabase {
       this.mongo = null;
     }
     this.initialized = false;
+    this.initPromise = null;
   }
 }
 

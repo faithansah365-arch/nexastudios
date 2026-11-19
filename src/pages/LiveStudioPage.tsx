@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  AudioLines,
   Camera,
   Download,
   FlipHorizontal,
@@ -15,6 +16,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  ScrollText,
   Sliders,
   Square,
   Type,
@@ -23,11 +25,24 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
+import { TeleprompterOverlay } from '../components/TeleprompterOverlay';
 import { useAuth } from '../context/AuthContext';
+import { StudioAudioProcessor, type NoiseReductionStrength } from '../engine/audioNoiseReduction';
 import { AutoFrameTracker } from '../engine/autoFrame';
 import { StudioSegmenter, type SegmentationMode } from '../engine/segmentation';
 import { getAspectDimensions, renderStudioFrame } from '../engine/studioRenderer';
 import { detectBrowserCapabilities, formatDuration, loadImageElement } from '../engine/videoCapabilities';
+import {
+  clampTeleprompterFontSize,
+  clampTeleprompterSpeed,
+  DEFAULT_TELEPROMPTER_FONT_SIZE,
+  DEFAULT_TELEPROMPTER_SCRIPT,
+  DEFAULT_TELEPROMPTER_SPEED,
+  MAX_TELEPROMPTER_FONT_SIZE,
+  MAX_TELEPROMPTER_SPEED,
+  MIN_TELEPROMPTER_FONT_SIZE,
+  MIN_TELEPROMPTER_SPEED,
+} from '../../shared/teleprompter';
 import { apiRequest, ApiError } from '../lib/api';
 import type {
   AspectRatio,
@@ -95,8 +110,7 @@ export function LiveStudioPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioProcessorRef = useRef<StudioAudioProcessor | null>(null);
 
   const bgImgRef = useRef<HTMLImageElement | null>(null);
   const fgMaskImgRef = useRef<HTMLImageElement | null>(null);
@@ -122,6 +136,12 @@ export function LiveStudioPage() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [micMuted, setMicMuted] = useState(false);
+  const [noiseReductionEnabled, setNoiseReductionEnabled] = useState(true);
+  const [noiseReductionStrength, setNoiseReductionStrength] = useState<NoiseReductionStrength>('balanced');
+  const [noiseReductionStats, setNoiseReductionStats] = useState<{ speechActive: boolean; reductionDb: number }>({
+    speechActive: false,
+    reductionDb: 0,
+  });
   const [mirrorCamera, setMirrorCamera] = useState(true);
   const [audioLevel, setAudioLevel] = useState(0);
 
@@ -141,9 +161,11 @@ export function LiveStudioPage() {
   const [exportStatus, setExportStatus] = useState<{ type: 'error' | 'success'; msg: string } | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Control panel tab, Auto-Frame & canvas drag state
+  // Control panel tab, Teleprompter, Auto-Frame & canvas drag state
   const [activeTab, setActiveTab] = useState<'studio' | 'subject' | 'color' | 'branding'>('studio');
   const [showTeleprompter, setShowTeleprompter] = useState(false);
+  const [teleprompterSpeed, setTeleprompterSpeed] = useState(DEFAULT_TELEPROMPTER_SPEED);
+  const [teleprompterFontSize, setTeleprompterFontSize] = useState(DEFAULT_TELEPROMPTER_FONT_SIZE);
   const [autoFrameEnabled, setAutoFrameEnabled] = useState(false);
   const [autoFrameDetected, setAutoFrameDetected] = useState(false);
   const autoFrameTrackerRef = useRef<AutoFrameTracker | null>(null);
@@ -193,6 +215,33 @@ export function LiveStudioPage() {
       const next = !prev;
       autoFrameTrackerRef.current?.reset();
       if (!next) setAutoFrameDetected(false);
+      return next;
+    });
+  }, []);
+
+  const toggleNoiseReduction = useCallback(() => {
+    setNoiseReductionEnabled((prev) => {
+      const next = !prev;
+      audioProcessorRef.current?.setEnabled(next);
+      return next;
+    });
+  }, []);
+
+  const handleNoiseStrengthChange = useCallback((nextStrength: NoiseReductionStrength) => {
+    setNoiseReductionStrength(nextStrength);
+    audioProcessorRef.current?.setStrength(nextStrength);
+  }, []);
+
+  const toggleTeleprompter = useCallback(() => {
+    setShowTeleprompter((prev) => {
+      const next = !prev;
+      if (next) {
+        setBranding((b) =>
+          b.teleprompterText && b.teleprompterText.trim()
+            ? b
+            : { ...b, teleprompterText: DEFAULT_TELEPROMPTER_SCRIPT }
+        );
+      }
       return next;
     });
   }, []);
@@ -313,17 +362,17 @@ export function LiveStudioPage() {
   }, []);
 
   const stopCameraStream = useCallback(() => {
+    if (audioProcessorRef.current) {
+      audioProcessorRef.current.dispose();
+      audioProcessorRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-      analyserRef.current = null;
-    }
     setCameraActive(false);
     setAudioLevel(0);
+    setNoiseReductionStats({ speechActive: false, reductionDb: 0 });
   }, []);
 
   const startCamera = useCallback(
@@ -347,7 +396,8 @@ export function LiveStudioPage() {
           audio: {
             deviceId: audId ? { exact: audId } : undefined,
             echoCancellation: true,
-            noiseSuppression: true,
+            noiseSuppression: noiseReductionEnabled,
+            autoGainControl: noiseReductionEnabled,
           },
         });
 
@@ -365,19 +415,15 @@ export function LiveStudioPage() {
           };
         });
 
-        // Audio monitoring via Web Audio API
+        // Real-time Web Audio AI noise reduction + broadcast output stream
         const audioTracks = stream.getAudioTracks();
         if (audioTracks.length > 0) {
           audioTracks.forEach((t) => {
             t.enabled = !micMuted;
           });
-          const audioCtx = new AudioContext();
-          const source = audioCtx.createMediaStreamSource(stream);
-          const analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 256;
-          source.connect(analyser);
-          audioCtxRef.current = audioCtx;
-          analyserRef.current = analyser;
+          const processor = new StudioAudioProcessor(noiseReductionEnabled, noiseReductionStrength);
+          processor.attachStream(stream);
+          audioProcessorRef.current = processor;
         }
 
         // Enumerate devices after permission granted
@@ -398,7 +444,7 @@ export function LiveStudioPage() {
         setCameraActive(false);
       }
     },
-    [caps.mediaDevicesSupported, micMuted, resolution, stopCameraStream]
+    [caps.mediaDevicesSupported, micMuted, noiseReductionEnabled, noiseReductionStrength, resolution, stopCameraStream]
   );
 
   // Sync mic mute toggle
@@ -424,7 +470,6 @@ export function LiveStudioPage() {
     let frameCount = 0;
     let lastFpsSample = performance.now();
     let lastAutoFrameUiSync = 0;
-    const audioData = new Uint8Array(128);
 
     const renderLoop = (now: number) => {
       rafId = requestAnimationFrame(renderLoop);
@@ -502,12 +547,16 @@ export function LiveStudioPage() {
         watermarkRequired: s.watermarkRequired,
       });
 
-      // Audio level meter update
-      if (analyserRef.current && !micMuted) {
-        analyserRef.current.getByteFrequencyData(audioData);
-        let sum = 0;
-        for (let i = 0; i < audioData.length; i++) sum += audioData[i];
-        setAudioLevel(Math.min(100, Math.round((sum / audioData.length / 128) * 100)));
+      // Audio level meter & noise reduction state update
+      if (audioProcessorRef.current && !micMuted) {
+        setAudioLevel(audioProcessorRef.current.getMeterLevel());
+        if (now - lastAutoFrameUiSync >= 140) {
+          const stats = audioProcessorRef.current.getStats();
+          setNoiseReductionStats({
+            speechActive: stats.speechActive,
+            reductionDb: stats.reductionDb,
+          });
+        }
       } else {
         setAudioLevel(0);
       }
@@ -556,7 +605,10 @@ export function LiveStudioPage() {
 
     const canvasStream = canvasRef.current.captureStream(lowPowerMode ? 24 : 30);
     const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
-    if (streamRef.current) {
+    const processedAudioTracks = audioProcessorRef.current?.getOutputAudioTracks() ?? [];
+    if (processedAudioTracks.length > 0) {
+      processedAudioTracks.forEach((t) => tracks.push(t));
+    } else if (streamRef.current) {
       streamRef.current.getAudioTracks().forEach((t) => tracks.push(t));
     }
     const combined = new MediaStream(tracks);
@@ -771,6 +823,20 @@ export function LiveStudioPage() {
 
               <button
                 type="button"
+                onClick={toggleNoiseReduction}
+                title="Toggle real-time AI background noise filtering for broadcast audio"
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium whitespace-nowrap transition-colors ${
+                  noiseReductionEnabled
+                    ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
+                    : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <AudioLines className="w-3.5 h-3.5" />
+                <span>{noiseReductionEnabled ? 'AI Noise Filter On' : 'Noise Filter Off'}</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setMirrorCamera((v) => !v)}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-medium whitespace-nowrap"
               >
@@ -789,6 +855,19 @@ export function LiveStudioPage() {
               >
                 <Gauge className="w-3.5 h-3.5" />
                 <span>{lowPowerMode ? 'Low-Power Mode On' : 'Standard Quality'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleTeleprompter}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium whitespace-nowrap transition-colors ${
+                  showTeleprompter
+                    ? 'border-[#06B6D4] text-[#06B6D4] bg-[#06B6D4]/10'
+                    : 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <ScrollText className="w-3.5 h-3.5" />
+                <span>{showTeleprompter ? 'Teleprompter On' : 'Teleprompter'}</span>
               </button>
             </div>
 
@@ -907,11 +986,17 @@ export function LiveStudioPage() {
               </div>
             )}
 
-            {/* Teleprompter Overlay (Creator+ plans) */}
-            {showTeleprompter && plan?.limits.teleprompter && branding.teleprompterText && (
-              <div className="absolute top-4 inset-x-10 p-4 rounded-lg bg-[#080B14]/80 border border-slate-700 text-center text-sm text-white max-h-32 overflow-y-auto">
-                {branding.teleprompterText}
-              </div>
+            {/* Eye-Contact AI Teleprompter Overlay */}
+            {showTeleprompter && (
+              <TeleprompterOverlay
+                script={branding.teleprompterText || ''}
+                onChangeScript={(nextScript) => setBranding((b) => ({ ...b, teleprompterText: nextScript }))}
+                scrollSpeed={teleprompterSpeed}
+                onChangeScrollSpeed={(nextSpeed) => setTeleprompterSpeed(clampTeleprompterSpeed(nextSpeed))}
+                fontSize={teleprompterFontSize}
+                onChangeFontSize={(nextFont) => setTeleprompterFontSize(clampTeleprompterFontSize(nextFont))}
+                onClose={() => setShowTeleprompter(false)}
+              />
             )}
           </div>
 
@@ -1003,9 +1088,9 @@ export function LiveStudioPage() {
             </div>
           </div>
 
-          {/* Audio Meter & Hardware Bar */}
-          <div className="p-3 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-4 gap-3 items-center text-xs">
-            <div className="flex items-center gap-2">
+          {/* Audio Meter, AI Noise Profile & Hardware Bar */}
+          <div className="p-3 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-12 gap-3 items-center text-xs">
+            <div className="sm:col-span-4 flex items-center gap-2">
               <span className="text-slate-500 dark:text-[#94A3B8] shrink-0">Mic Level</span>
               <div className="flex-1 h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
                 <div
@@ -1013,6 +1098,23 @@ export function LiveStudioPage() {
                   style={{ width: `${audioLevel}%` }}
                 />
               </div>
+              {cameraActive && noiseReductionEnabled && !micMuted && (
+                <span className="font-mono tabular-nums text-[11px] text-[#10B981] shrink-0">
+                  {noiseReductionStats.speechActive ? 'Voice' : `-${noiseReductionStats.reductionDb}dB`}
+                </span>
+              )}
+            </div>
+            <div className="sm:col-span-2">
+              <select
+                aria-label="Audio noise reduction strength"
+                disabled={!noiseReductionEnabled}
+                value={noiseReductionStrength}
+                onChange={(e) => handleNoiseStrengthChange(e.target.value as NoiseReductionStrength)}
+                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 disabled:opacity-50"
+              >
+                <option value="balanced">Filter: Balanced</option>
+                <option value="studio">Filter: Studio Strong</option>
+              </select>
             </div>
             <select
               aria-label="Camera device"
@@ -1021,7 +1123,7 @@ export function LiveStudioPage() {
                 setSelectedVideoId(e.target.value);
                 if (cameraActive) void startCamera(e.target.value, selectedAudioId);
               }}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 truncate"
+              className="sm:col-span-2 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 truncate"
             >
               <option value="">Default Camera</option>
               {videoDevices.map((d, i) => (
@@ -1037,7 +1139,7 @@ export function LiveStudioPage() {
                 setSelectedAudioId(e.target.value);
                 if (cameraActive) void startCamera(selectedVideoId, e.target.value);
               }}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 truncate"
+              className="sm:col-span-2 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 truncate"
             >
               <option value="">Default Microphone</option>
               {audioDevices.map((d, i) => (
@@ -1046,7 +1148,7 @@ export function LiveStudioPage() {
                 </option>
               ))}
             </select>
-            <div className="text-slate-500 dark:text-[#94A3B8] truncate text-right">
+            <div className="sm:col-span-2 text-slate-500 dark:text-[#94A3B8] truncate text-right">
               {segStatusText}
             </div>
           </div>
@@ -1494,28 +1596,60 @@ export function LiveStudioPage() {
                 />
               </div>
 
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">Teleprompter</span>
-                  {plan?.limits.teleprompter ? (
-                    <input
-                      type="checkbox"
-                      checked={showTeleprompter}
-                      onChange={(e) => setShowTeleprompter(e.target.checked)}
-                    />
-                  ) : (
-                    <Link to="/dashboard/subscription" className="text-[#6366F1] font-semibold">
-                      Creator+ Plan
-                    </Link>
-                  )}
+                  <span className="font-medium">AI Eye-Contact Teleprompter</span>
+                  <button
+                    type="button"
+                    onClick={toggleTeleprompter}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                      showTeleprompter
+                        ? 'bg-[#06B6D4] text-slate-950'
+                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    {showTeleprompter ? 'Overlay On' : 'Show Overlay'}
+                  </button>
                 </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span>Scroll Speed</span>
+                    <span className="font-mono tabular-nums">{teleprompterSpeed} px/s</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={MIN_TELEPROMPTER_SPEED}
+                    max={MAX_TELEPROMPTER_SPEED}
+                    step={2}
+                    value={teleprompterSpeed}
+                    onChange={(e) => setTeleprompterSpeed(clampTeleprompterSpeed(Number(e.target.value)))}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span>Font Size</span>
+                    <span className="font-mono tabular-nums">{teleprompterFontSize} px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={MIN_TELEPROMPTER_FONT_SIZE}
+                    max={MAX_TELEPROMPTER_FONT_SIZE}
+                    step={1}
+                    value={teleprompterFontSize}
+                    onChange={(e) => setTeleprompterFontSize(clampTeleprompterFontSize(Number(e.target.value)))}
+                    className="w-full"
+                  />
+                </div>
+
                 <textarea
-                  rows={3}
-                  disabled={!plan?.limits.teleprompter}
+                  rows={4}
                   value={branding.teleprompterText || ''}
                   onChange={(e) => setBranding((b) => ({ ...b, teleprompterText: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700 disabled:opacity-50"
-                  placeholder="Paste script notes for your live session..."
+                  className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700"
+                  placeholder="Paste script notes or use the AI Script button directly on the teleprompter overlay..."
                 />
               </div>
             </div>

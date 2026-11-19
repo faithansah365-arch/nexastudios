@@ -17,14 +17,52 @@ export function getSessionSecret(): string {
     return cachedSessionSecret;
   }
   const secretFile = path.join(getDataDir(), '.session_secret');
-  if (fs.existsSync(secretFile)) {
-    cachedSessionSecret = fs.readFileSync(secretFile, 'utf8').trim();
+  try {
+    if (fs.existsSync(secretFile)) {
+      cachedSessionSecret = fs.readFileSync(secretFile, 'utf8').trim();
+      return cachedSessionSecret;
+    }
+    fs.mkdirSync(getDataDir(), { recursive: true });
+    cachedSessionSecret = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(secretFile, cachedSessionSecret, { mode: 0o600 });
+    return cachedSessionSecret;
+  } catch {
+    // Serverless read-only fallback: derive deterministically from configured DB/OAuth secret if available
+    const seed = process.env.MONGODB_URI || process.env.GOOGLE_CLIENT_SECRET || process.env.PAYSTACK_SECRET_KEY;
+    if (seed) {
+      console.warn('[SECURITY] SESSION_SECRET env var not set; deriving fallback key from deployment config. Set SESSION_SECRET in production.');
+      cachedSessionSecret = crypto.createHmac('sha256', 'nexaflow-session-fallback').update(seed).digest('hex');
+    } else {
+      cachedSessionSecret = crypto.randomBytes(32).toString('hex');
+    }
     return cachedSessionSecret;
   }
-  fs.mkdirSync(getDataDir(), { recursive: true });
-  cachedSessionSecret = crypto.randomBytes(32).toString('hex');
-  fs.writeFileSync(secretFile, cachedSessionSecret, { mode: 0o600 });
-  return cachedSessionSecret;
+}
+
+export function signEphemeralPayload(payload: Record<string, unknown>, ttlMs = 10 * 60 * 1000): string {
+  const data = { ...payload, exp: Date.now() + ttlMs };
+  const encoded = Buffer.from(JSON.stringify(data), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+export function verifyEphemeralPayload<T extends Record<string, unknown>>(token: string): T | null {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [encoded, sig] = token.split('.');
+  if (!encoded || !sig) return null;
+  const expectedSig = crypto.createHmac('sha256', getSessionSecret()).update(encoded).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expectedSig);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as T & { exp?: number };
+    if (!parsed || typeof parsed.exp !== 'number' || parsed.exp <= Date.now()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 export function hashPassword(password: string): string {
@@ -203,6 +241,7 @@ export function isHttpsRequest(req: Request): boolean {
     origin.startsWith('https://') ||
     referer.startsWith('https://') ||
     host.includes('.run.app') ||
+    host.includes('.vercel.app') ||
     (!isLocalHost && appUrl.startsWith('https://'))
   );
 }
