@@ -5,12 +5,22 @@ import type {
   LightingPreset,
   SubjectConfig,
 } from '../../shared/types';
+import {
+  analyzeImageColorStats,
+  clamp,
+  computeCinematicCameraTransform,
+  computeEnvironmentColorMatch,
+  getColorGradeFilter,
+  type ImageColorStats,
+} from './mattingMath';
 
 export interface StudioRenderScene {
   backgroundImg: HTMLImageElement | null;
   customMaskImg: HTMLImageElement | null;
   logoImg: HTMLImageElement | null;
   subjectCanvas: HTMLCanvasElement | null;
+  fgStats?: ImageColorStats | null;
+  timeMs?: number;
   subjectConfig: SubjectConfig;
   foregroundMaskConfig: ForegroundMaskConfig;
   brandingConfig: BrandingConfig;
@@ -28,45 +38,35 @@ let wrapCanvas: HTMLCanvasElement | null = null;
 let wrapCtx: CanvasRenderingContext2D | null = null;
 let tintCanvas: HTMLCanvasElement | null = null;
 let tintCtx: CanvasRenderingContext2D | null = null;
+let gradeCanvas: HTMLCanvasElement | null = null;
+let gradeCtx: CanvasRenderingContext2D | null = null;
 let sampleToneCanvas: HTMLCanvasElement | null = null;
 let sampleToneCtx: CanvasRenderingContext2D | null = null;
-const ambientToneCache = new WeakMap<HTMLImageElement, { r: number; g: number; b: number }>();
 
-function sampleAmbientColor(img: HTMLImageElement | null): { r: number; g: number; b: number } {
+const bgStatsCache = new WeakMap<HTMLImageElement, ImageColorStats>();
+
+export function analyzeBackgroundStats(img: HTMLImageElement | null): ImageColorStats | null {
   if (!img || !img.complete || img.naturalWidth === 0 || typeof document === 'undefined') {
-    return { r: 24, g: 36, b: 64 };
+    return null;
   }
-  const cached = ambientToneCache.get(img);
+  const cached = bgStatsCache.get(img);
   if (cached) return cached;
   try {
     if (!sampleToneCanvas) {
       sampleToneCanvas = document.createElement('canvas');
-      sampleToneCanvas.width = 8;
-      sampleToneCanvas.height = 8;
+      sampleToneCanvas.width = 32;
+      sampleToneCanvas.height = 18;
       sampleToneCtx = sampleToneCanvas.getContext('2d', { willReadFrequently: true });
     }
-    if (!sampleToneCtx) return { r: 24, g: 36, b: 64 };
-    sampleToneCtx.clearRect(0, 0, 8, 8);
-    sampleToneCtx.drawImage(img, 0, 0, 8, 8);
-    const data = sampleToneCtx.getImageData(0, 0, 8, 8).data;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    const count = data.length / 4;
-    for (let i = 0; i < data.length; i += 4) {
-      r += data[i];
-      g += data[i + 1];
-      b += data[i + 2];
-    }
-    const tone = {
-      r: Math.round(r / count),
-      g: Math.round(g / count),
-      b: Math.round(b / count),
-    };
-    ambientToneCache.set(img, tone);
-    return tone;
+    if (!sampleToneCtx) return null;
+    sampleToneCtx.clearRect(0, 0, 32, 18);
+    sampleToneCtx.drawImage(img, 0, 0, 32, 18);
+    const data = sampleToneCtx.getImageData(0, 0, 32, 18).data;
+    const stats = analyzeImageColorStats(data, 32, 18);
+    bgStatsCache.set(img, stats);
+    return stats;
   } catch {
-    return { r: 24, g: 36, b: 64 };
+    return null;
   }
 }
 
@@ -101,6 +101,20 @@ function ensureWrapBuffers(ew: number, eh: number): {
     tintCanvas.height = eh;
   }
   return { envC: envCanvas, envX: envCtx, wrapC: wrapCanvas, wrapX: wrapCtx, tintC: tintCanvas, tintX: tintCtx };
+}
+
+function ensureGradeBuffer(w: number, h: number): { c: HTMLCanvasElement; x: CanvasRenderingContext2D } | null {
+  if (typeof document === 'undefined') return null;
+  if (!gradeCanvas) {
+    gradeCanvas = document.createElement('canvas');
+    gradeCtx = gradeCanvas.getContext('2d');
+  }
+  if (!gradeCtx) return null;
+  if (gradeCanvas.width !== w || gradeCanvas.height !== h) {
+    gradeCanvas.width = w;
+    gradeCanvas.height = h;
+  }
+  return { c: gradeCanvas, x: gradeCtx };
 }
 
 export function getAspectDimensions(ratio: AspectRatio, resolution: '720p' | '1080p' | '4k'): { width: number; height: number } {
@@ -142,12 +156,20 @@ function drawForegroundDesk(
   h: number,
   fg: ForegroundMaskConfig,
   customMaskImg: HTMLImageElement | null,
-  branding: BrandingConfig
+  branding: BrandingConfig,
+  camScaleMul = 1,
+  camPanX = 0
 ): void {
   if (!fg.enabled || fg.deskStyle === 'none') return;
 
   ctx.save();
   ctx.globalAlpha = Math.max(0.2, Math.min(1, fg.deskOpacity ?? 0.96));
+
+  if (camScaleMul !== 1 || camPanX !== 0) {
+    ctx.translate(w / 2 + camPanX * w * 1.15, h);
+    ctx.scale(camScaleMul, camScaleMul);
+    ctx.translate(-w / 2, -h);
+  }
 
   if (fg.deskStyle === 'custom_mask' && customMaskImg && customMaskImg.complete) {
     drawCoverImage(ctx, customMaskImg, w, h);
@@ -256,16 +278,31 @@ function drawForegroundDesk(
 export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: number, scene: StudioRenderScene): void {
   ctx.clearRect(0, 0, w, h);
 
-  // 1. 2.5D Background Layer with subtle camera-depth counter-parallax
-  const parallaxX = Math.max(-0.018, Math.min(0.018, -(scene.subjectConfig.offsetX || 0) * 0.08)) * w;
-  const parallaxY = Math.max(-0.012, Math.min(0.012, -(scene.subjectConfig.offsetY || 0) * 0.05)) * h;
+  const sc = scene.subjectConfig;
+  const cam = computeCinematicCameraTransform(scene.timeMs ?? 0, sc.cinematic);
+  const bgStats = analyzeBackgroundStats(scene.backgroundImg);
+  const autoMatchEnabled = sc.autoColorMatch ?? true;
+  const colorComp = computeEnvironmentColorMatch(scene.fgStats ?? null, bgStats, scene.lightingPreset, {
+    autoColorMatch: autoMatchEnabled,
+    colorMatchStrength: sc.colorMatchStrength ?? 0.72,
+    exposureMatch: sc.exposureMatch ?? 0.65,
+  });
+
+  // 1. 2.5D Background Layer with perspective horizon shift, camera push-in/drift, and depth-of-field blur
+  const horizonShiftPx = clamp(sc.cinematic?.bgHorizonShift ?? 0, -0.15, 0.15) * h;
+  const parallaxX =
+    (Math.max(-0.02, Math.min(0.02, -(sc.offsetX || 0) * 0.08)) + cam.panXNorm * 0.7) * w;
+  const parallaxY =
+    (Math.max(-0.015, Math.min(0.015, -(sc.offsetY || 0) * 0.05)) + cam.panYNorm * 0.7) * h + horizonShiftPx;
+  const bgOverscan = Math.max(1.04, cam.bgScale);
+
   if (!scene.transparentBackground) {
     ctx.save();
     if (scene.backgroundImg && scene.backgroundImg.complete && scene.backgroundImg.naturalWidth > 0) {
-      if (scene.subjectConfig.bgBlur > 0) {
-        ctx.filter = `blur(${scene.subjectConfig.bgBlur}px)`;
+      if (sc.bgBlur > 0) {
+        ctx.filter = `blur(${sc.bgBlur}px)`;
       }
-      drawCoverImage(ctx, scene.backgroundImg, w, h, 1.04, parallaxX, parallaxY);
+      drawCoverImage(ctx, scene.backgroundImg, w, h, bgOverscan, parallaxX, parallaxY);
       ctx.filter = 'none';
     } else {
       const bgGrad = ctx.createLinearGradient(0, 0, w, h);
@@ -296,8 +333,8 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
     ctx.save();
     const boxW = Math.round(w * 0.36);
     const boxH = Math.round(h * 0.14);
-    const boxX = Math.round(w * 0.06);
-    const boxY = Math.round(h * 0.1);
+    const boxX = Math.round(w * 0.06 + parallaxX * 0.5);
+    const boxY = Math.round(h * 0.1 + parallaxY * 0.5);
     ctx.fillStyle = 'rgba(8, 11, 20, 0.72)';
     ctx.strokeStyle = scene.brandingConfig.secondaryColor || '#06B6D4';
     ctx.lineWidth = 2;
@@ -310,39 +347,81 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
     ctx.restore();
   }
 
-  // 3. Subject Layer + Ambient Studio Light Wrap
+  // 3. Subject Layer + Skin-Safe Environment Color Matching + Grounded Shadow + Ambient Light Wrap
   if (scene.subjectCanvas && scene.subjectCanvas.width > 0 && scene.subjectCanvas.height > 0) {
-    const sc = scene.subjectConfig;
     const sw = scene.subjectCanvas.width;
     const sh = scene.subjectCanvas.height;
 
-    const baseScale = Math.min(w / sw, h / sh) * sc.scale;
+    const baseScale = Math.min(w / sw, h / sh) * sc.scale * cam.subjectScaleMul;
     const drawW = sw * baseScale;
     const drawH = sh * baseScale;
-    const cx = w / 2 + sc.offsetX * w;
-    const cy = h - drawH / 2 + sc.offsetY * h;
+    const cx = w / 2 + (sc.offsetX + cam.panXNorm) * w;
+    const cy = h - drawH / 2 + (sc.offsetY + cam.panYNorm) * h;
+
+    // 3a. Grounded Studio Contact Shadow (projected behind subject toward desk/floor plane, never around face/hair)
+    if (sc.shadowIntensity > 0.02 && !scene.transparentBackground) {
+      ctx.save();
+      const deskOffset = scene.foregroundMaskConfig.enabled && scene.foregroundMaskConfig.deskStyle !== 'none'
+        ? h * (scene.foregroundMaskConfig.deskHeightRatio || 0.25) * 0.72
+        : 0;
+      const anchorY = Math.min(h * 0.96, cy + drawH * 0.36 - deskOffset * 0.25);
+      const shadowRx = Math.max(40, drawW * 0.28);
+      const shadowRy = Math.max(16, drawH * 0.14);
+      const g = ctx.createRadialGradient(cx + 8, anchorY, shadowRx * 0.1, cx + 8, anchorY, shadowRx);
+      const sAlpha = clamp(sc.shadowIntensity * 0.45, 0.04, 0.42);
+      g.addColorStop(0, `rgba(4, 8, 18, ${sAlpha})`);
+      g.addColorStop(0.55, `rgba(4, 8, 18, ${sAlpha * 0.42})`);
+      g.addColorStop(1, 'rgba(4, 8, 18, 0)');
+      ctx.translate(cx + 8, anchorY);
+      ctx.scale(1, shadowRy / shadowRx);
+      ctx.translate(-(cx + 8), -anchorY);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx + 8, anchorY, shadowRx, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // 3b. Combined Manual + Automatic Environment Color/Exposure Filter + Sharpness Matching
+    const combinedBrightness = clamp(sc.brightness * colorComp.exposureGain, 0.55, 1.55);
+    const combinedContrast = clamp(
+      sc.contrast * colorComp.contrastGain + Math.max(0, sc.fgSharpness ?? 0) * 0.08,
+      0.55,
+      1.6
+    );
+    const combinedSat = clamp(sc.saturation * colorComp.saturationGain, 0, 2.0);
+    const fgSharp = clamp(sc.fgSharpness ?? 0, -1, 1);
 
     ctx.save();
     const filters: string[] = [
-      `brightness(${sc.brightness})`,
-      `contrast(${sc.contrast})`,
-      `saturate(${sc.saturation})`,
+      `brightness(${combinedBrightness.toFixed(3)})`,
+      `contrast(${combinedContrast.toFixed(3)})`,
+      `saturate(${combinedSat.toFixed(3)})`,
     ];
-    if (sc.colorTemp > 5) {
-      filters.push(`sepia(${Math.min(0.28, (sc.colorTemp / 100) * 0.4)})`);
-    } else if (sc.colorTemp < -5) {
-      filters.push(`hue-rotate(${Math.max(-18, sc.colorTemp * 0.3)}deg)`);
+
+    const manualWarmSepia = sc.colorTemp > 5 ? Math.min(0.28, (sc.colorTemp / 100) * 0.4) : 0;
+    const totalWarmSepia = clamp(manualWarmSepia + colorComp.warmSepia, 0, 0.3);
+    if (totalWarmSepia > 0.005) {
+      filters.push(`sepia(${totalWarmSepia.toFixed(3)})`);
     }
-    if (scene.lightingPreset === 'warm_studio') {
-      filters.push('sepia(0.06)');
+
+    const manualCoolDeg = sc.colorTemp < -5 ? Math.max(-18, sc.colorTemp * 0.3) : 0;
+    const totalCoolDeg = clamp(manualCoolDeg + colorComp.coolHueDeg, -20, 0);
+    if (totalCoolDeg < -0.5) {
+      filters.push(`hue-rotate(${totalCoolDeg.toFixed(1)}deg)`);
     }
+
+    // Match studio softness when subject camera is overly crispy against blurred studio depth
+    if (fgSharp < -0.05) {
+      filters.push(`blur(${(Math.abs(fgSharp) * 1.15).toFixed(2)}px)`);
+    }
+
     ctx.filter = filters.join(' ');
 
-    // Subtle soft studio depth (avoiding heavy dark cutout outline ring around hair/shoulders)
     if (sc.shadowIntensity > 0.01) {
-      ctx.shadowColor = `rgba(0, 0, 0, ${Math.min(0.32, sc.shadowIntensity * 0.32)})`;
-      ctx.shadowBlur = Math.round(h * 0.045);
-      ctx.shadowOffsetY = Math.round(h * 0.012);
+      ctx.shadowColor = `rgba(0, 0, 0, ${Math.min(0.26, sc.shadowIntensity * 0.28)})`;
+      ctx.shadowBlur = Math.round(h * 0.038);
+      ctx.shadowOffsetY = Math.round(h * 0.01);
     }
 
     ctx.translate(cx, cy);
@@ -352,11 +431,11 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
     ctx.drawImage(scene.subjectCanvas, -drawW / 2, -drawH / 2, drawW, drawH);
     ctx.restore();
 
-    // Realistic Ambient Light Wrap: softly wraps studio wall colors 2-4px inward along the subject edge
-    const lightWrap = Math.max(0, Math.min(1, sc.lightWrap ?? 0.25));
-    if (lightWrap > 0.01 && !scene.transparentBackground) {
-      const ew = Math.min(320, Math.max(120, Math.round(w * 0.28)));
-      const eh = Math.max(68, Math.round((ew / w) * h));
+    // 3c. Ambient Color Harmonies + 2-4px Studio Edge Light Wrap
+    const lightWrap = Math.max(0, Math.min(1, sc.lightWrap ?? 0.28));
+    if ((lightWrap > 0.01 || colorComp.ambientTintAlpha > 0.01) && !scene.transparentBackground) {
+      const ew = Math.min(340, Math.max(140, Math.round(w * 0.28)));
+      const eh = Math.max(76, Math.round((ew / w) * h));
       const bufs = ensureWrapBuffers(ew, eh);
       if (bufs) {
         const { envC, envX, wrapC, wrapX, tintC, tintX } = bufs;
@@ -366,77 +445,99 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
         const sDw = drawW * scaleRatio;
         const sDh = drawH * scaleRatio;
 
-        // Subtle atmospheric color-match so the person's skin/clothing tone matches the 2.5D room ambience
-        const tone = sampleAmbientColor(scene.backgroundImg);
-        tintX.save();
-        tintX.clearRect(0, 0, ew, eh);
-        tintX.translate(sCx, sCy);
-        if (scene.mirrorCamera) tintX.scale(-1, 1);
-        tintX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
-        tintX.globalCompositeOperation = 'source-in';
-        tintX.fillStyle = `rgb(${tone.r}, ${tone.g}, ${tone.b})`;
-        tintX.fillRect(-sDw / 2 - 4, -sDh / 2 - 4, sDw + 8, sDh + 8);
-        tintX.restore();
+        // Atmospheric Soft-Light Harmony Wash across subject (skin-safe intensity)
+        const washAlpha = Math.max(
+          colorComp.ambientTintAlpha,
+          Math.min(0.16, lightWrap * 0.28)
+        );
+        if (washAlpha > 0.01) {
+          const { r, g, b } = colorComp.ambientTintRgb;
+          tintX.save();
+          tintX.clearRect(0, 0, ew, eh);
+          tintX.translate(sCx, sCy);
+          if (scene.mirrorCamera) tintX.scale(-1, 1);
+          tintX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
+          tintX.globalCompositeOperation = 'source-in';
+          tintX.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          tintX.fillRect(-sDw / 2 - 4, -sDh / 2 - 4, sDw + 8, sDh + 8);
+          tintX.restore();
 
-        ctx.save();
-        ctx.globalCompositeOperation = 'soft-light';
-        ctx.globalAlpha = Math.min(0.18, lightWrap * 0.35);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(tintC, 0, 0, w, h);
-        ctx.restore();
-
-        // Capture diffused ambient background wall light for 2-4px studio rim wrap
-        envX.save();
-        envX.clearRect(0, 0, ew, eh);
-        envX.filter = 'blur(8px)';
-        if (scene.backgroundImg && scene.backgroundImg.complete && scene.backgroundImg.naturalWidth > 0) {
-          drawCoverImage(envX, scene.backgroundImg, ew, eh, 1.04, parallaxX * scaleRatio, parallaxY * scaleRatio);
-        } else {
-          const g = envX.createLinearGradient(0, 0, ew, eh);
-          g.addColorStop(0, '#0B1020');
-          g.addColorStop(1, '#172033');
-          envX.fillStyle = g;
-          envX.fillRect(0, 0, ew, eh);
+          ctx.save();
+          ctx.globalCompositeOperation = 'soft-light';
+          ctx.globalAlpha = washAlpha;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(tintC, 0, 0, w, h);
+          ctx.restore();
         }
-        envX.restore();
 
-        // Carve out inner core so only the outer 2-4px rim inside the silhouette keeps background light
-        wrapX.save();
-        wrapX.clearRect(0, 0, ew, eh);
-        wrapX.drawImage(envC, 0, 0, ew, eh);
+        // Studio Background Light Wrap inside outer 2-4px hair & shoulder edge
+        if (lightWrap > 0.01) {
+          envX.save();
+          envX.clearRect(0, 0, ew, eh);
+          envX.filter = 'blur(8px)';
+          if (scene.backgroundImg && scene.backgroundImg.complete && scene.backgroundImg.naturalWidth > 0) {
+            drawCoverImage(
+              envX,
+              scene.backgroundImg,
+              ew,
+              eh,
+              bgOverscan,
+              parallaxX * scaleRatio,
+              parallaxY * scaleRatio
+            );
+          } else {
+            const g = envX.createLinearGradient(0, 0, ew, eh);
+            g.addColorStop(0, '#0B1020');
+            g.addColorStop(1, '#172033');
+            envX.fillStyle = g;
+            envX.fillRect(0, 0, ew, eh);
+          }
+          envX.restore();
 
-        wrapX.save();
-        wrapX.translate(sCx, sCy);
-        if (scene.mirrorCamera) wrapX.scale(-1, 1);
-        wrapX.globalCompositeOperation = 'destination-out';
-        wrapX.filter = 'blur(4px)';
-        wrapX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
-        wrapX.restore();
+          wrapX.save();
+          wrapX.clearRect(0, 0, ew, eh);
+          wrapX.drawImage(envC, 0, 0, ew, eh);
 
-        // Strictly clamp within crisp subject alpha so wrap stays 100% inside the person
-        wrapX.save();
-        wrapX.translate(sCx, sCy);
-        if (scene.mirrorCamera) wrapX.scale(-1, 1);
-        wrapX.globalCompositeOperation = 'destination-in';
-        wrapX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
-        wrapX.restore();
-        wrapX.restore();
+          wrapX.save();
+          wrapX.translate(sCx, sCy);
+          if (scene.mirrorCamera) wrapX.scale(-1, 1);
+          wrapX.globalCompositeOperation = 'destination-out';
+          wrapX.filter = 'blur(4px)';
+          wrapX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
+          wrapX.restore();
 
-        // Blend wrapped edge highlight gently onto the subject on main canvas
-        ctx.save();
-        ctx.globalCompositeOperation = 'screen';
-        ctx.globalAlpha = Math.min(0.65, lightWrap * 0.8);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(wrapC, 0, 0, w, h);
-        ctx.restore();
+          wrapX.save();
+          wrapX.translate(sCx, sCy);
+          if (scene.mirrorCamera) wrapX.scale(-1, 1);
+          wrapX.globalCompositeOperation = 'destination-in';
+          wrapX.drawImage(scene.subjectCanvas, -sDw / 2, -sDh / 2, sDw, sDh);
+          wrapX.restore();
+          wrapX.restore();
+
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = Math.min(0.62, lightWrap * 0.78);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(wrapC, 0, 0, w, h);
+          ctx.restore();
+        }
       }
     }
   }
 
-  // 4. Foreground Layer (Virtual Desk / Pulpit / Custom Mask rendered IN FRONT of lower subject)
-  drawForegroundDesk(ctx, w, h, scene.foregroundMaskConfig, scene.customMaskImg, scene.brandingConfig);
+  // 4. Foreground Desk Layer (scaled cohesively in 2.5D Z-space with camera motion)
+  drawForegroundDesk(
+    ctx,
+    w,
+    h,
+    scene.foregroundMaskConfig,
+    scene.customMaskImg,
+    scene.brandingConfig,
+    cam.fgScaleMul,
+    cam.panXNorm
+  );
 
   // 5. Branding & Broadcast Graphics Layer
   if (scene.logoImg && scene.logoImg.complete && scene.logoImg.naturalWidth > 0) {
@@ -477,7 +578,29 @@ export function renderStudioFrame(ctx: CanvasRenderingContext2D, w: number, h: n
     ctx.restore();
   }
 
-  // 6. Free Plan Watermark
+  // 6. Master Cinematic Color Grade + Smooth Transition (applied across composited scene)
+  const gradeFilter = !scene.transparentBackground ? getColorGradeFilter(sc.cinematic?.colorGrade) : '';
+  if (gradeFilter) {
+    const gBuf = ensureGradeBuffer(w, h);
+    if (gBuf) {
+      gBuf.x.clearRect(0, 0, w, h);
+      gBuf.x.drawImage(ctx.canvas, 0, 0, w, h);
+      ctx.save();
+      ctx.clearRect(0, 0, w, h);
+      ctx.filter = gradeFilter;
+      ctx.drawImage(gBuf.c, 0, 0, w, h);
+      ctx.restore();
+    }
+  }
+
+  if (!scene.transparentBackground && cam.fadeAlpha < 0.999) {
+    ctx.save();
+    ctx.fillStyle = `rgba(6, 9, 19, ${(1 - cam.fadeAlpha).toFixed(3)})`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  // 7. Free Plan Watermark
   if (scene.watermarkRequired) {
     ctx.save();
     const text = 'NexaStudios';

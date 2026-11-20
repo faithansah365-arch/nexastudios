@@ -49,6 +49,21 @@ export interface PlanRecord {
   updatedAt: string;
 }
 
+export type ColorGradePreset = 'natural' | 'warm_cinema' | 'crisp_broadcast' | 'moody_studio' | 'filmic';
+
+export type CameraMotionMode = 'none' | 'subtle_push_in' | 'gentle_drift';
+
+export type SceneTransitionMode = 'none' | 'smooth_fade';
+
+export interface CinematicConfig {
+  motionMode: CameraMotionMode;
+  motionIntensity: number; // 0 to 1
+  colorGrade: ColorGradePreset;
+  sceneTransition: SceneTransitionMode;
+  bgHorizonShift: number; // -0.15 to 0.15 vertical perspective offset
+  bgPerspectiveZoom: number; // 0.9 to 1.35 background lens scale match
+}
+
 export interface SubjectConfig {
   scale: number; // 0.35 - 2.0
   offsetX: number; // -0.6 to 0.6 normalized
@@ -62,6 +77,13 @@ export interface SubjectConfig {
   edgeChoke?: number; // 0 to 1 (inward anti-halo trim)
   bodySensitivity?: number; // 0 to 1 (higher retains hands, arms & dark clothing)
   lightWrap?: number; // 0 to 0.85 (ambient background rim light wrap)
+  temporalStability?: number; // 0 to 1 (motion-aware temporal hold & anti-flicker)
+  autoColorMatch?: boolean; // automatic foreground/background lighting & temperature integration
+  colorMatchStrength?: number; // 0 to 1 (how strongly foreground harmonizes with studio palette)
+  exposureMatch?: number; // 0 to 1 (automatic exposure & contrast balance toward studio)
+  fgSharpness?: number; // -1 (soften to match depth of field) to +1 (crisp edge clarity)
+  autoStudioMode?: boolean; // intelligent automatic tuning vs manual expert controls
+  cinematic?: CinematicConfig;
   shadowIntensity: number; // 0 to 1
   chromaKeyEnabled: boolean;
   chromaKeyColor: string;

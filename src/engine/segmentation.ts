@@ -1,5 +1,15 @@
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
 import { computeSilhouetteBounds, type SilhouetteBounds } from './autoFrame';
+import {
+  analyzeImageColorStats,
+  analyzeMaskHealthAndRecover,
+  createMaskPipelineBuffers,
+  extractLumaAndMotion,
+  refineAlphaMaskPipeline,
+  type ImageColorStats,
+  type MaskHealthMetrics,
+  type MaskPipelineBuffers,
+} from './mattingMath';
 
 export type SegmentationMode = 'mediapipe' | 'chroma_key' | 'original';
 
@@ -10,6 +20,23 @@ export interface SegmentationStatus {
   error: string | null;
   backendInfo: string;
 }
+
+export interface SegmentationDiagnostics {
+  health: MaskHealthMetrics;
+  fgStats: ImageColorStats | null;
+  recoveredFramesCount: number;
+  flaggedFramesCount: number;
+}
+
+const DEFAULT_HEALTH: MaskHealthMetrics = {
+  state: 'ok',
+  coverage: 0,
+  borderLeakage: 0,
+  iouStability: 1,
+  recoveryStreak: 0,
+  issueCategory: null,
+  issueReason: null,
+};
 
 export class StudioSegmenter {
   private segmenter: ImageSegmenter | null = null;
@@ -25,16 +52,22 @@ export class StudioSegmenter {
   private lastMaskImageData: ImageData | null = null;
   private lastDecontamImageData: ImageData | null = null;
 
-  // Reusable per-pixel Float32 buffers for zero-allocation mask refinement
   private maskBufSize = 0;
-  private rawBuf = new Float32Array(0);
-  private erodeHorizBuf = new Float32Array(0);
-  private erodedBuf = new Float32Array(0);
-  private temporalBuf = new Float32Array(0);
-  private blurHorizBuf = new Float32Array(0);
-  private finalBuf = new Float32Array(0);
+  private bufs: MaskPipelineBuffers = createMaskPipelineBuffers(0);
+  private hasPrevFrame = false;
   private hasTemporalHistory = false;
+  private hasPrevGood = false;
+  private prevCoverage = 0;
+  private recoveryStreak = 0;
+  private lastMediaPipeTs = 0;
+
   public lastSilhouetteBounds: SilhouetteBounds | null = null;
+  public lastDiagnostics: SegmentationDiagnostics = {
+    health: DEFAULT_HEALTH,
+    fgStats: null,
+    recoveredFramesCount: 0,
+    flaggedFramesCount: 0,
+  };
 
   public status: SegmentationStatus = {
     mode: 'mediapipe',
@@ -58,13 +91,36 @@ export class StudioSegmenter {
   private ensureBuffers(len: number): void {
     if (this.maskBufSize === len) return;
     this.maskBufSize = len;
-    this.rawBuf = new Float32Array(len);
-    this.erodeHorizBuf = new Float32Array(len);
-    this.erodedBuf = new Float32Array(len);
-    this.temporalBuf = new Float32Array(len);
-    this.blurHorizBuf = new Float32Array(len);
-    this.finalBuf = new Float32Array(len);
+    this.bufs = createMaskPipelineBuffers(len);
+    this.hasPrevFrame = false;
     this.hasTemporalHistory = false;
+    this.hasPrevGood = false;
+    this.prevCoverage = 0;
+    this.recoveryStreak = 0;
+  }
+
+  /**
+   * Resets temporal history & failure streaks (call when switching clips or jumping timeline).
+   */
+  resetTemporalState(): void {
+    this.hasPrevFrame = false;
+    this.hasTemporalHistory = false;
+    this.hasPrevGood = false;
+    this.prevCoverage = 0;
+    this.recoveryStreak = 0;
+    this.lastDiagnostics = {
+      health: DEFAULT_HEALTH,
+      fgStats: null,
+      recoveredFramesCount: 0,
+      flaggedFramesCount: 0,
+    };
+  }
+
+  private getMonotonicTimestamp(requestedMs: number): number {
+    const candidate = Number.isFinite(requestedMs) ? Math.round(requestedMs) : this.lastMediaPipeTs + 33;
+    const safeTs = Math.max(this.lastMediaPipeTs + 1, candidate);
+    this.lastMediaPipeTs = safeTs;
+    return safeTs;
   }
 
   async initMediaPipe(): Promise<boolean> {
@@ -149,7 +205,8 @@ export class StudioSegmenter {
   }
 
   /**
-   * Produces a clean, halo-free transparent RGBA canvas containing the segmented subject.
+   * Produces a clean, halo-free transparent RGBA canvas containing the segmented subject,
+   * using motion-aware joint-edge matting, temporal hold recovery, and edge color decontamination.
    */
   extractSubjectCanvas(
     source: HTMLVideoElement | HTMLCanvasElement,
@@ -159,6 +216,7 @@ export class StudioSegmenter {
       edgeSoftness: number;
       edgeChoke?: number;
       bodySensitivity?: number;
+      temporalStability?: number;
       detectSilhouette?: boolean;
       chromaColor: string;
       chromaSimilarity: number;
@@ -179,20 +237,26 @@ export class StudioSegmenter {
     }
 
     if (mode === 'original') {
+      const w = Math.min(256, srcW);
+      const h = Math.max(1, Math.round((w / srcW) * srcH));
+      if (this.sampleCanvas.width !== w || this.sampleCanvas.height !== h) {
+        this.sampleCanvas.width = w;
+        this.sampleCanvas.height = h;
+      }
+      this.sampleCtx.drawImage(source, 0, 0, w, h);
+      const srcPixels = this.sampleCtx.getImageData(0, 0, w, h).data;
+      const fgStats = analyzeImageColorStats(srcPixels, w, h);
+
       if (options.detectSilhouette && this.segmenter) {
-        const maskW = Math.min(256, srcW);
-        const maskH = Math.max(1, Math.round((maskW / srcW) * srcH));
-        if (this.sampleCanvas.width !== maskW || this.sampleCanvas.height !== maskH) {
-          this.sampleCanvas.width = maskW;
-          this.sampleCanvas.height = maskH;
-        }
-        this.sampleCtx.drawImage(source, 0, 0, maskW, maskH);
         try {
-          const result = this.segmenter.segmentForVideo(this.sampleCanvas, options.timestampMs);
+          const result = this.segmenter.segmentForVideo(
+            this.sampleCanvas,
+            this.getMonotonicTimestamp(options.timestampMs)
+          );
           const confidenceMasks = result.confidenceMasks;
           if (confidenceMasks && confidenceMasks.length > 0) {
             const floats = confidenceMasks[0].getAsFloat32Array();
-            this.lastSilhouetteBounds = computeSilhouetteBounds(floats, maskW, maskH);
+            this.lastSilhouetteBounds = computeSilhouetteBounds(floats, w, h);
             result.close();
           }
         } catch {
@@ -201,6 +265,11 @@ export class StudioSegmenter {
       } else if (!options.detectSilhouette) {
         this.lastSilhouetteBounds = null;
       }
+      this.lastDiagnostics = {
+        ...this.lastDiagnostics,
+        health: { ...DEFAULT_HEALTH, coverage: this.lastSilhouetteBounds?.coverage ?? 0.45 },
+        fgStats,
+      };
       this.personCtx.clearRect(0, 0, srcW, srcH);
       this.personCtx.drawImage(source, 0, 0, srcW, srcH);
       return this.personCanvas;
@@ -233,151 +302,69 @@ export class StudioSegmenter {
     }
 
     this.sampleCtx.drawImage(source, 0, 0, maskW, maskH);
+    const srcPixels = this.sampleCtx.getImageData(0, 0, maskW, maskH).data;
+    const total = maskW * maskH;
+
+    extractLumaAndMotion(srcPixels, this.bufs, total, this.hasPrevFrame);
+    this.hasPrevFrame = true;
 
     const choke = Math.max(0, Math.min(1, options.edgeChoke ?? 0.3));
-    const sensitivity = Math.max(0, Math.min(1, options.bodySensitivity ?? 0.6));
+    const sensitivity = Math.max(0, Math.min(1, options.bodySensitivity ?? 0.65));
     const softness = Math.max(0, Math.min(10, options.edgeSoftness ?? 2));
+    const stability = Math.max(0, Math.min(1, options.temporalStability ?? 0.65));
 
     try {
-      const result = this.segmenter.segmentForVideo(this.sampleCanvas, options.timestampMs);
+      const result = this.segmenter.segmentForVideo(
+        this.sampleCanvas,
+        this.getMonotonicTimestamp(options.timestampMs)
+      );
       const confidenceMasks = result.confidenceMasks;
       if (confidenceMasks && confidenceMasks.length > 0) {
         const floats = confidenceMasks[0].getAsFloat32Array();
-        const total = maskW * maskH;
-        const raw = this.rawBuf;
-
-        // 1. Calibrated smoothstep guided by bodySensitivity (keeps hands, arms & dark clothes) + edgeChoke
-        const low = Math.max(0.08, 0.36 - sensitivity * 0.22 + choke * 0.14);
-        const high = Math.max(low + 0.16, 0.78 - sensitivity * 0.2);
-        const span = high - low;
-        for (let i = 0; i < total; i++) {
-          const conf = floats[i];
-          if (conf <= low) {
-            raw[i] = 0;
-          } else if (conf >= high) {
-            raw[i] = 1;
-          } else {
-            const t = (conf - low) / span;
-            raw[i] = t * t * (3 - 2 * t);
-          }
-        }
+        const out = refineAlphaMaskPipeline(floats, maskW, maskH, this.bufs, {
+          bodySensitivity: sensitivity,
+          edgeChoke: choke,
+          edgeSoftness: softness,
+          temporalStability: stability,
+          hasTemporalHistory: this.hasTemporalHistory,
+        });
         result.close();
+        this.hasTemporalHistory = true;
 
-        // 1b. Interior hole recovery: if neighboring pixels are mostly body, restore dropped torso/hand patches
-        if (sensitivity > 0.35) {
-          const recoverWeight = Math.min(1, (sensitivity - 0.35) * 1.4);
-          for (let y = 1; y < maskH - 1; y++) {
-            const row = y * maskW;
-            for (let x = 1; x < maskW - 1; x++) {
-              const idx = row + x;
-              const cur = raw[idx];
-              if (cur > 0.04 && cur < 0.85) {
-                const neighAvg =
-                  (raw[idx - 1] + raw[idx + 1] + raw[idx - maskW] + raw[idx + maskW]) * 0.25;
-                if (neighAvg > 0.65) {
-                  raw[idx] = cur + (neighAvg - cur) * recoverWeight * 0.65;
-                }
-              }
-            }
-          }
-        }
+        // Failure Detection & Safe Temporal Recovery (never restores room background)
+        const health = analyzeMaskHealthAndRecover(out, this.bufs.prevGood, maskW, maskH, {
+          hasPrevGood: this.hasPrevGood,
+          prevCoverage: this.prevCoverage,
+          recoveryStreak: this.recoveryStreak,
+          maxHoldFrames: 12,
+        });
 
-        // 2. Gentle 1px inward anti-halo trim (preserves thin arms/hands while removing background lines)
-        const eroded = this.erodedBuf;
-        if (choke > 0.06) {
-          const eH = this.erodeHorizBuf;
-          for (let y = 0; y < maskH; y++) {
-            const row = y * maskW;
-            for (let x = 0; x < maskW; x++) {
-              let m = raw[row + x];
-              const xl = x > 0 ? x - 1 : 0;
-              const xr = x + 1 < maskW ? x + 1 : maskW - 1;
-              if (raw[row + xl] < m) m = raw[row + xl];
-              if (raw[row + xr] < m) m = raw[row + xr];
-              eH[row + x] = m;
-            }
-          }
-          const erodeBlend = Math.min(0.85, choke * 0.9);
-          for (let y = 0; y < maskH; y++) {
-            const row = y * maskW;
-            const yu = (y > 0 ? y - 1 : 0) * maskW;
-            const yd = (y + 1 < maskH ? y + 1 : maskH - 1) * maskW;
-            for (let x = 0; x < maskW; x++) {
-              let m = eH[row + x];
-              if (eH[yu + x] < m) m = eH[yu + x];
-              if (eH[yd + x] < m) m = eH[yd + x];
-              eroded[row + x] = raw[row + x] * (1 - erodeBlend) + m * erodeBlend;
-            }
-          }
+        if (health.state === 'ok') {
+          this.hasPrevGood = true;
+          this.prevCoverage = health.coverage;
+          this.recoveryStreak = 0;
         } else {
-          eroded.set(raw);
+          this.recoveryStreak = health.recoveryStreak;
         }
 
-        // 3. Motion-adaptive temporal stabilization (stops silhouette line shimmer without ghosting)
-        const temporal = this.temporalBuf;
-        if (!this.hasTemporalHistory) {
-          temporal.set(eroded);
-          this.hasTemporalHistory = true;
-        } else {
-          for (let i = 0; i < total; i++) {
-            const curr = eroded[i];
-            const prev = temporal[i];
-            const diff = Math.abs(curr - prev);
-            // Large motion updates fast; micro-jitter around edges is damped
-            const blend = diff > 0.28 ? 0.88 : diff > 0.1 ? 0.62 : 0.4;
-            temporal[i] = prev + (curr - prev) * blend;
-          }
-        }
+        // Always maintain silhouette bounds for QC & live framing diagnostics
+        this.lastSilhouetteBounds = computeSilhouetteBounds(out, maskW, maskH);
 
-        // 4. Strictly INWARD spatial feathering (never expands alpha outward over room walls)
-        const out = this.finalBuf;
-        if (softness > 0.2) {
-          const bH = this.blurHorizBuf;
-          const r = softness >= 4 ? 2 : 1;
-          const div = r * 2 + 1;
-          for (let y = 0; y < maskH; y++) {
-            const row = y * maskW;
-            for (let x = 0; x < maskW; x++) {
-              let sum = temporal[row + x];
-              for (let k = 1; k <= r; k++) {
-                const xl = x - k >= 0 ? x - k : 0;
-                const xr = x + k < maskW ? x + k : maskW - 1;
-                sum += temporal[row + xl] + temporal[row + xr];
-              }
-              bH[row + x] = sum / div;
-            }
-          }
-          const featherMix = Math.min(1, softness / 5);
-          for (let y = 0; y < maskH; y++) {
-            const row = y * maskW;
-            for (let x = 0; x < maskW; x++) {
-              let sum = bH[row + x];
-              for (let k = 1; k <= r; k++) {
-                const yu = (y - k >= 0 ? y - k : 0) * maskW;
-                const yd = (y + k < maskH ? y + k : maskH - 1) * maskW;
-                sum += bH[yu + x] + bH[yd + x];
-              }
-              const blurred = sum / div;
-              const orig = temporal[row + x];
-              const mixed = orig * (1 - featherMix) + blurred * featherMix;
-              // Clamping to `orig` prevents any outward halo expansion into background pixels
-              out[row + x] = mixed < orig ? mixed : orig;
-            }
-          }
-        } else {
-          out.set(temporal);
-        }
+        // Zero-readback foreground color analysis for auto studio color/exposure matching
+        const fgStats = analyzeImageColorStats(srcPixels, maskW, maskH, out);
 
-        if (options.detectSilhouette) {
-          this.lastSilhouetteBounds = computeSilhouetteBounds(out, maskW, maskH);
-        } else {
-          this.lastSilhouetteBounds = null;
-        }
+        this.lastDiagnostics = {
+          health,
+          fgStats,
+          recoveredFramesCount:
+            this.lastDiagnostics.recoveredFramesCount + (health.state === 'recovered' ? 1 : 0),
+          flaggedFramesCount:
+            this.lastDiagnostics.flaggedFramesCount + (health.state === 'flagged' ? 1 : 0),
+        };
 
         const imgData = this.lastMaskImageData!;
         const data = imgData.data;
         const decontamData = this.lastDecontamImageData!.data;
-        const srcPixels = this.sampleCtx.getImageData(0, 0, maskW, maskH).data;
 
         for (let y = 0; y < maskH; y++) {
           const row = y * maskW;
@@ -405,8 +392,8 @@ export class StudioSegmenter {
               continue;
             }
 
-            // Semi-transparent transition border: decontaminate RGB toward nearby solid foreground color
-            // so real-world room wall colors don't bleed onto hair or shoulders
+            // Semi-transparent transition rim: decontaminate RGB toward nearby solid foreground color
+            // so original room wall color does not bleed onto hair, ears, or shoulders
             let sumR = 0;
             let sumG = 0;
             let sumB = 0;
@@ -419,7 +406,7 @@ export class StudioSegmenter {
                 const nx = x + dx;
                 if (nx < 0 || nx >= maskW) continue;
                 const na = out[nRow + nx];
-                if (na >= 0.82) {
+                if (na >= 0.8) {
                   const np = (nRow + nx) * 4;
                   const w = na * (1 / (1 + dx * dx + dy * dy));
                   sumR += srcPixels[np] * w;
@@ -434,12 +421,12 @@ export class StudioSegmenter {
               const fgR = sumR / weightSum;
               const fgG = sumG / weightSum;
               const fgB = sumB / weightSum;
-              const replaceMix = Math.min(0.95, 1 - alpha * 0.6);
+              const replaceMix = Math.min(0.95, 1 - alpha * 0.55);
               decontamData[p] = Math.round(srcPixels[p] * (1 - replaceMix) + fgR * replaceMix);
               decontamData[p + 1] = Math.round(srcPixels[p + 1] * (1 - replaceMix) + fgG * replaceMix);
               decontamData[p + 2] = Math.round(srcPixels[p + 2] * (1 - replaceMix) + fgB * replaceMix);
               decontamData[p + 3] = Math.min(255, Math.round(alpha * 255));
-              // Keep full-res core out of semi-transparent edge to prevent double room-color spill
+              // Exclude semi-transparent edge from full-res draw to avoid double room-color spill
               data[p] = 255;
               data[p + 1] = 255;
               data[p + 2] = 255;
@@ -457,7 +444,17 @@ export class StudioSegmenter {
         this.decontamCtx.putImageData(this.lastDecontamImageData!, 0, 0);
       }
     } catch {
-      // Keep last valid mask if a single frame fails
+      // Keep last valid maskCanvas + decontamCanvas safely rather than exposing raw room background
+      this.lastDiagnostics = {
+        ...this.lastDiagnostics,
+        recoveredFramesCount: this.lastDiagnostics.recoveredFramesCount + 1,
+        health: {
+          ...this.lastDiagnostics.health,
+          state: this.hasPrevGood ? 'recovered' : 'flagged',
+          issueCategory: 'dropout',
+          issueReason: 'Frame segmentation interrupted; safely holding prior foreground matte.',
+        },
+      };
     }
 
     this.personCtx.save();
@@ -509,6 +506,13 @@ export class StudioSegmenter {
     const sim = options.chromaSimilarity * 255;
     const smooth = Math.max(1, options.chromaSmoothness * 255);
 
+    let fgSumR = 0;
+    let fgSumG = 0;
+    let fgSumB = 0;
+    let fgLumaSum = 0;
+    let fgLumaSq = 0;
+    let fgCount = 0;
+
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i];
       const g = d[i + 1];
@@ -539,14 +543,49 @@ export class StudioSegmenter {
             d[i + 2] = Math.round(b - (b - maxOther) * spillFactor);
           }
         }
+        if (d[i + 3] >= 180) {
+          const luma = d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722;
+          fgSumR += d[i];
+          fgSumG += d[i + 1];
+          fgSumB += d[i + 2];
+          fgLumaSum += luma;
+          fgLumaSq += luma * luma;
+          fgCount++;
+        }
       }
     }
 
-    if (options.detectSilhouette) {
-      this.lastSilhouetteBounds = computeSilhouetteBounds(d, w, h, { isRgbaUint8: true });
-    } else {
-      this.lastSilhouetteBounds = null;
-    }
+    const bounds = computeSilhouetteBounds(d, w, h, { isRgbaUint8: true });
+    this.lastSilhouetteBounds = bounds;
+
+    const meanLuma = fgCount > 0 ? fgLumaSum / fgCount : 120;
+    const fgStats: ImageColorStats | null =
+      fgCount > 20
+        ? {
+            meanLuma,
+            contrastStd: Math.sqrt(Math.max(0, fgLumaSq / fgCount - meanLuma * meanLuma)),
+            meanR: fgSumR / fgCount,
+            meanG: fgSumG / fgCount,
+            meanB: fgSumB / fgCount,
+            warmth: (fgSumR - fgSumB) / (fgCount * 255),
+            sampleCount: fgCount,
+          }
+        : null;
+
+    this.lastDiagnostics = {
+      health: {
+        state: bounds ? 'ok' : 'flagged',
+        coverage: bounds?.coverage ?? 0,
+        borderLeakage: 0,
+        iouStability: 1,
+        recoveryStreak: 0,
+        issueCategory: bounds ? null : 'dropout',
+        issueReason: bounds ? null : 'No subject visible after chroma key filter.',
+      },
+      fgStats,
+      recoveredFramesCount: this.lastDiagnostics.recoveredFramesCount,
+      flaggedFramesCount: this.lastDiagnostics.flaggedFramesCount + (bounds ? 0 : 1),
+    };
 
     this.sampleCtx.putImageData(frame, 0, 0);
     this.personCtx.save();

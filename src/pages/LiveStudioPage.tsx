@@ -30,7 +30,14 @@ import { useAuth } from '../context/AuthContext';
 import { StudioAudioProcessor, type NoiseReductionStrength } from '../engine/audioNoiseReduction';
 import { AutoFrameTracker } from '../engine/autoFrame';
 import { StudioSegmenter, type SegmentationMode } from '../engine/segmentation';
-import { getAspectDimensions, renderStudioFrame } from '../engine/studioRenderer';
+import { ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  computeAutoFixPatch,
+  evaluateClipQuality,
+  type QualityReport,
+  type QualitySample,
+} from '../engine/qualityControl';
+import { analyzeBackgroundStats, getAspectDimensions, renderStudioFrame } from '../engine/studioRenderer';
 import { detectBrowserCapabilities, formatDuration, loadImageElement } from '../engine/videoCapabilities';
 import {
   clampTeleprompterFontSize,
@@ -47,6 +54,9 @@ import { apiRequest, ApiError } from '../lib/api';
 import type {
   AspectRatio,
   BrandingConfig,
+  CameraMotionMode,
+  CinematicConfig,
+  ColorGradePreset,
   CustomStudio,
   ExportResolution,
   ForegroundMaskConfig,
@@ -59,6 +69,15 @@ function clampNum(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
+const DEFAULT_CINEMATIC: CinematicConfig = {
+  motionMode: 'none',
+  motionIntensity: 0.45,
+  colorGrade: 'natural',
+  sceneTransition: 'none',
+  bgHorizonShift: 0,
+  bgPerspectiveZoom: 1.04,
+};
+
 const DEFAULT_SUBJECT: SubjectConfig = {
   scale: 0.95,
   offsetX: 0,
@@ -69,10 +88,17 @@ const DEFAULT_SUBJECT: SubjectConfig = {
   saturation: 1,
   bgBlur: 2,
   edgeSoftness: 2,
-  edgeChoke: 0.3,
-  bodySensitivity: 0.6,
-  lightWrap: 0.28,
-  shadowIntensity: 0.12,
+  edgeChoke: 0.34,
+  bodySensitivity: 0.66,
+  lightWrap: 0.32,
+  temporalStability: 0.72,
+  autoColorMatch: true,
+  colorMatchStrength: 0.72,
+  exposureMatch: 0.65,
+  fgSharpness: 0,
+  autoStudioMode: true,
+  cinematic: DEFAULT_CINEMATIC,
+  shadowIntensity: 0.22,
   chromaKeyEnabled: false,
   chromaKeyColor: '#00b140',
   chromaSimilarity: 0.24,
@@ -149,6 +175,10 @@ export function LiveStudioPage() {
   const [segMode, setSegMode] = useState<SegmentationMode>('mediapipe');
   const [segStatusText, setSegStatusText] = useState('Initializing local model...');
   const [segWarning, setSegWarning] = useState<string | null>(null);
+  const [liveMattingWarning, setLiveMattingWarning] = useState<string | null>(null);
+  const [liveQcReport, setLiveQcReport] = useState<QualityReport | null>(null);
+  const liveQcBufferRef = useRef<QualitySample[]>([]);
+  const [colorControlMode, setColorControlMode] = useState<'auto' | 'advanced'>('auto');
   const [lowPowerMode, setLowPowerMode] = useState(caps.lowPowerRecommended);
   const [fps, setFps] = useState(0);
 
@@ -493,14 +523,35 @@ export function LiveStudioPage() {
         subjectCanvas = seg.extractSubjectCanvas(video, s.segMode, {
           lowPowerMode: s.lowPowerMode,
           edgeSoftness: s.subjectConfig.edgeSoftness,
-          edgeChoke: s.subjectConfig.edgeChoke ?? 0.3,
-          bodySensitivity: s.subjectConfig.bodySensitivity ?? 0.6,
-          detectSilhouette: s.autoFrameEnabled,
+          edgeChoke: s.subjectConfig.edgeChoke ?? 0.34,
+          bodySensitivity: s.subjectConfig.bodySensitivity ?? 0.66,
+          temporalStability: s.subjectConfig.temporalStability ?? 0.72,
+          detectSilhouette: true,
           chromaColor: s.subjectConfig.chromaKeyColor,
           chromaSimilarity: s.subjectConfig.chromaSimilarity,
           chromaSmoothness: s.subjectConfig.chromaSmoothness,
           timestampMs: now,
         });
+
+        // Record rolling live quality sample every ~300ms for instant studio health checks
+        const buf = liveQcBufferRef.current;
+        const lastSample = buf[buf.length - 1];
+        const secNow = Number((now / 1000).toFixed(1));
+        if (!lastSample || secNow - lastSample.timestampSec >= 0.3) {
+          buf.push({
+            timestampSec: secNow,
+            health: { ...seg.lastDiagnostics.health },
+            bounds: seg.lastSilhouetteBounds ? { ...seg.lastSilhouetteBounds } : null,
+            fgStats: seg.lastDiagnostics.fgStats ? { ...seg.lastDiagnostics.fgStats } : null,
+          });
+          if (buf.length > 24) buf.shift();
+
+          if (seg.lastDiagnostics.health.state === 'flagged' && s.segMode !== 'original') {
+            setLiveMattingWarning(seg.lastDiagnostics.health.issueReason || 'Matting stability warning.');
+          } else {
+            setLiveMattingWarning(null);
+          }
+        }
 
         if (s.autoFrameEnabled && autoFrameTrackerRef.current) {
           const tracked = autoFrameTrackerRef.current.update(
@@ -538,6 +589,8 @@ export function LiveStudioPage() {
         customMaskImg: fgMaskImgRef.current,
         logoImg: logoImgRef.current,
         subjectCanvas,
+        fgStats: seg?.lastDiagnostics.fgStats ?? null,
+        timeMs: now,
         subjectConfig: s.subjectConfig,
         foregroundMaskConfig: s.fgConfig,
         brandingConfig: s.branding,
@@ -617,7 +670,7 @@ export function LiveStudioPage() {
     try {
       const recorder = new MediaRecorder(combined, {
         mimeType: caps.supportedMimeType,
-        videoBitsPerSecond: resolution === '1080p' ? 5_000_000 : 2_800_000,
+        videoBitsPerSecond: resolution === '4k' ? 14_000_000 : resolution === '1080p' ? 8_000_000 : 3_200_000,
       });
       recorder.ondataavailable = (ev) => {
         if (ev.data && ev.data.size > 0) recordedChunksRef.current.push(ev.data);
@@ -923,6 +976,13 @@ export function LiveStudioPage() {
             <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-400 flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{segWarning}</span>
+            </div>
+          )}
+
+          {liveMattingWarning && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-400 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{liveMattingWarning}</span>
             </div>
           )}
 
@@ -1485,74 +1545,251 @@ export function LiveStudioPage() {
 
           {activeTab === 'color' && (
             <div className="space-y-4 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-slate-800 dark:text-slate-200">Studio Integration</span>
+                <div className="inline-flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-[#080B14] border border-slate-200 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setColorControlMode('auto')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      colorControlMode === 'auto'
+                        ? 'bg-[#6366F1] text-white'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Auto Studio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setColorControlMode('advanced')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      colorControlMode === 'advanced'
+                        ? 'bg-[#06B6D4] text-slate-950'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Advanced
+                  </button>
+                </div>
+              </div>
+
               <div className="p-3 rounded-lg bg-[#06B6D4]/10 border border-[#06B6D4]/30 flex items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-700 dark:text-slate-200">
-                  Remove outline lines &amp; match studio lighting
+                <span className="text-[11px] text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#06B6D4]" />
+                  <span>Auto balance lighting &amp; edges</span>
                 </span>
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
                     setSubjectConfig((c) => ({
                       ...c,
+                      autoColorMatch: true,
+                      colorMatchStrength: 0.74,
+                      exposureMatch: 0.68,
                       edgeChoke: 0.34,
                       bodySensitivity: 0.68,
+                      temporalStability: 0.74,
                       edgeSoftness: 2,
                       lightWrap: 0.34,
-                      shadowIntensity: 0.1,
-                    }))
-                  }
-                  className="px-2.5 py-1 rounded bg-[#06B6D4] text-slate-950 font-semibold shrink-0 hover:bg-cyan-400"
+                      fgSharpness: 0,
+                      shadowIntensity: 0.22,
+                    }));
+                    setLiveQcReport(null);
+                  }}
+                  className="px-2.5 py-1 rounded bg-[#06B6D4] text-slate-950 font-semibold shrink-0 hover:bg-cyan-400 whitespace-nowrap"
                 >
-                  Realistic Blend
+                  Auto Blend
                 </button>
               </div>
+
+              <label className="flex items-center justify-between cursor-pointer">
+                <span className="font-medium">Auto Color &amp; Exposure Match</span>
+                <input
+                  type="checkbox"
+                  checked={subjectConfig.autoColorMatch ?? true}
+                  onChange={(e) => setSubjectConfig((c) => ({ ...c, autoColorMatch: e.target.checked }))}
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-medium mb-1">Lighting Preset</label>
+                  <select
+                    value={lightingPreset}
+                    onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700"
+                  >
+                    <option value="neutral">Neutral Studio</option>
+                    <option value="warm_studio">Warm Tungsten</option>
+                    <option value="cool_broadcast">Cool Broadcast</option>
+                    <option value="dramatic">Dramatic Vignette</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Color Grade</label>
+                  <select
+                    value={subjectConfig.cinematic?.colorGrade ?? 'natural'}
+                    onChange={(e) =>
+                      setSubjectConfig((c) => ({
+                        ...c,
+                        cinematic: {
+                          ...(c.cinematic ?? DEFAULT_CINEMATIC),
+                          colorGrade: e.target.value as ColorGradePreset,
+                        },
+                      }))
+                    }
+                    className="w-full px-2.5 py-2 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700"
+                  >
+                    <option value="natural">Natural Studio</option>
+                    <option value="crisp_broadcast">Crisp Broadcast</option>
+                    <option value="warm_cinema">Warm Cinema</option>
+                    <option value="moody_studio">Moody Studio</option>
+                    <option value="filmic">Filmic Curve</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
-                <label className="block font-medium mb-1.5">Lighting Preset</label>
+                <label className="block font-medium mb-1">Cinematic Camera Motion</label>
                 <select
-                  value={lightingPreset}
-                  onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+                  value={subjectConfig.cinematic?.motionMode ?? 'none'}
+                  onChange={(e) =>
+                    setSubjectConfig((c) => ({
+                      ...c,
+                      cinematic: {
+                        ...(c.cinematic ?? DEFAULT_CINEMATIC),
+                        motionMode: e.target.value as CameraMotionMode,
+                      },
+                    }))
+                  }
                   className="w-full px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-300 dark:border-slate-700"
                 >
-                  <option value="neutral">Neutral Studio</option>
-                  <option value="warm_studio">Warm Tungsten</option>
-                  <option value="cool_broadcast">Cool Broadcast</option>
-                  <option value="dramatic">Dramatic Vignette</option>
+                  <option value="none">Locked Tripod</option>
+                  <option value="subtle_push_in">Subtle 2.5D Push-In</option>
+                  <option value="gentle_drift">Gentle Studio Drift</option>
                 </select>
               </div>
-              {[
-                { key: 'bodySensitivity', label: 'Body Detection Boost', min: 0, max: 1, step: 0.02, def: 0.6 },
-                { key: 'edgeChoke', label: 'Anti-Halo Edge Trim', min: 0, max: 1, step: 0.02, def: 0.3 },
-                { key: 'edgeSoftness', label: 'Inward Edge Feather (px)', min: 0, max: 10, step: 1, def: 2 },
-                { key: 'lightWrap', label: 'Studio Light Wrap', min: 0, max: 0.85, step: 0.02, def: 0.28 },
-                { key: 'brightness', label: 'Brightness', min: 0.6, max: 1.4, step: 0.02, def: 1 },
-                { key: 'contrast', label: 'Contrast', min: 0.6, max: 1.4, step: 0.02, def: 1 },
-                { key: 'saturation', label: 'Saturation', min: 0.2, max: 1.8, step: 0.02, def: 1 },
-                { key: 'colorTemp', label: 'Color Temperature', min: -40, max: 40, step: 1, def: 0 },
-                { key: 'bgBlur', label: 'Background Blur (px)', min: 0, max: 16, step: 1, def: 2 },
-                { key: 'shadowIntensity', label: 'Soft Ambient Depth', min: 0, max: 0.9, step: 0.05, def: 0.12 },
-              ].map((ctrl) => {
-                const rawVal = subjectConfig[ctrl.key as keyof SubjectConfig];
-                const val = typeof rawVal === 'number' ? rawVal : ctrl.def;
-                return (
-                  <div key={ctrl.key}>
-                    <div className="flex justify-between mb-1">
-                      <span>{ctrl.label}</span>
-                      <span className="font-mono">{Number.isInteger(ctrl.step) ? val : val.toFixed(2)}</span>
+
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span>Background Depth Blur</span>
+                  <span className="font-mono tabular-nums">{subjectConfig.bgBlur} px</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={16}
+                  step={1}
+                  value={subjectConfig.bgBlur}
+                  onChange={(e) => setSubjectConfig((c) => ({ ...c, bgBlur: Number(e.target.value) }))}
+                  className="w-full"
+                />
+              </div>
+
+              {/* Live Quality Check */}
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-[#080B14] border border-slate-200 dark:border-slate-800 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#06B6D4]" />
+                    <span>Live Studio Quality Check</span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!cameraActive}
+                    onClick={() => {
+                      const report = evaluateClipQuality(liveQcBufferRef.current, {
+                        segMode,
+                        subjectConfig,
+                        fgConfig,
+                        bgStats: analyzeBackgroundStats(bgImgRef.current),
+                        lightingPreset,
+                      });
+                      setLiveQcReport(report);
+                    }}
+                    className="px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-[11px] font-semibold disabled:opacity-40 whitespace-nowrap"
+                  >
+                    Run Check
+                  </button>
+                </div>
+                {liveQcReport && (
+                  <div className="space-y-1.5 pt-1 text-[11px]">
+                    <div
+                      className={`font-semibold ${
+                        liveQcReport.overallStatus === 'passed'
+                          ? 'text-[#10B981]'
+                          : liveQcReport.overallStatus === 'warnings'
+                          ? 'text-amber-400'
+                          : 'text-red-400'
+                      }`}
+                    >
+                      {liveQcReport.summary}
                     </div>
-                    <input
-                      type="range"
-                      min={ctrl.min}
-                      max={ctrl.max}
-                      step={ctrl.step}
-                      value={val}
-                      onChange={(e) =>
-                        setSubjectConfig((c) => ({ ...c, [ctrl.key]: Number(e.target.value) }))
-                      }
-                      className="w-full"
-                    />
+                    {liveQcReport.issues.slice(0, 3).map((iss) => (
+                      <div key={iss.id} className="text-slate-600 dark:text-slate-300">
+                        · {iss.message}
+                      </div>
+                    ))}
+                    {liveQcReport.issues.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubjectConfig((c) => ({ ...c, ...computeAutoFixPatch(liveQcReport, c) }));
+                          setLiveQcReport(null);
+                        }}
+                        className="px-2 py-1 rounded bg-[#06B6D4] text-slate-950 font-semibold"
+                      >
+                        Apply Suggested Fixes
+                      </button>
+                    )}
                   </div>
-                );
-              })}
+                )}
+              </div>
+
+              {colorControlMode === 'advanced' && (
+                <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-200">
+                    <Sliders className="w-3.5 h-3.5 text-[#06B6D4]" />
+                    <span>Advanced Fine-Tuning</span>
+                  </div>
+                  {[
+                    { key: 'bodySensitivity', label: 'Body Detection Boost', min: 0, max: 1, step: 0.02, def: 0.66 },
+                    { key: 'temporalStability', label: 'Temporal Anti-Flicker', min: 0, max: 1, step: 0.02, def: 0.72 },
+                    { key: 'edgeChoke', label: 'Anti-Halo Edge Trim', min: 0, max: 1, step: 0.02, def: 0.34 },
+                    { key: 'edgeSoftness', label: 'Inward Edge Feather (px)', min: 0, max: 10, step: 1, def: 2 },
+                    { key: 'fgSharpness', label: 'Subject Sharpness Match', min: -1, max: 1, step: 0.05, def: 0 },
+                    { key: 'lightWrap', label: 'Studio Light Wrap', min: 0, max: 0.85, step: 0.02, def: 0.32 },
+                    { key: 'colorMatchStrength', label: 'Auto Color Harmony', min: 0, max: 1, step: 0.02, def: 0.72 },
+                    { key: 'exposureMatch', label: 'Auto Exposure Balance', min: 0, max: 1, step: 0.02, def: 0.65 },
+                    { key: 'brightness', label: 'Manual Brightness', min: 0.6, max: 1.4, step: 0.02, def: 1 },
+                    { key: 'contrast', label: 'Manual Contrast', min: 0.6, max: 1.4, step: 0.02, def: 1 },
+                    { key: 'saturation', label: 'Manual Saturation', min: 0.2, max: 1.8, step: 0.02, def: 1 },
+                    { key: 'colorTemp', label: 'Manual Color Temperature', min: -40, max: 40, step: 1, def: 0 },
+                    { key: 'shadowIntensity', label: 'Grounded Shadow Depth', min: 0, max: 0.9, step: 0.05, def: 0.22 },
+                  ].map((ctrl) => {
+                    const rawVal = subjectConfig[ctrl.key as keyof SubjectConfig];
+                    const val = typeof rawVal === 'number' ? rawVal : ctrl.def;
+                    return (
+                      <div key={ctrl.key}>
+                        <div className="flex justify-between mb-1">
+                          <span>{ctrl.label}</span>
+                          <span className="font-mono tabular-nums">{Number.isInteger(ctrl.step) ? val : val.toFixed(2)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={ctrl.min}
+                          max={ctrl.max}
+                          step={ctrl.step}
+                          value={val}
+                          onChange={(e) =>
+                            setSubjectConfig((c) => ({ ...c, [ctrl.key]: Number(e.target.value) }))
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
